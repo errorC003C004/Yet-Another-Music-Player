@@ -1,0 +1,6 @@
+mutagen==1.47.0
+pyside6==6.10.1
+pyside6_addons==6.10.1
+pyside6_essentials==6.10.1
+python_vlc==3.0.21203
+Requests==2.33.1
