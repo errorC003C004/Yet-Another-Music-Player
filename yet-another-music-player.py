@@ -11,28 +11,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl, Signal, QObject
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
-from PySide6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGroupBox,
-    QLabel,
-    QComboBox,
-    QPushButton,
-    QCheckBox,
-    QSlider,
-    QListWidget,
-    QFileDialog,
-    QMessageBox,
-    QProgressBar,
-    QLineEdit,
-    QTabWidget,
-    QListWidgetItem,
-    QColorDialog,
-    QGridLayout,
-    QInputDialog,
-)
+from PySide6.QtWidgets import *
 import json
 from dataclasses import dataclass, asdict
 from collections import deque
