@@ -1,6 +1,6 @@
 # Every time I worked on it
 # 4-17-26 1:45 AM
-#
+# 4-17-26 11:23 PM
 import sys
 import os
 from PySide6.QtWidgets import *
@@ -41,6 +41,7 @@ import base64
 import requests
 import vlc
 import time
+import random
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -108,7 +109,6 @@ class Preset:
     volume: float = 100 
 
 
-
 class Audio:
     def __init__(self, player) -> None:
         super().__init__()
@@ -117,9 +117,17 @@ class Audio:
             "--network-caching=300"
         )
         self.audio_player = self.instance.media_player_new()
+        self.history = deque(maxlen=50)
+        self.recent_shuffle = deque(maxlen=10)
 
         self.player = player
         self.preset = Preset()
+
+        self._event_manager = self.audio_player.event_manager()
+        self._event_manager.event_attach(
+            vlc.EventType.MediaPlayerEndReached,
+            self._on_song_end
+        )
 
     def get_current_song(self):
         songs = self.player.get_song_list()
@@ -180,11 +188,20 @@ class Audio:
 
         self.audio_player.play()
 
-        self.player.setWindowTitle(f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}")
-        print(f"Current song: {os.path.basename(self.get_current_song())}")
+        self.player._set_now_playing_info(artist, title)
+        self.player.setWindowTitle(
+            f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}"
+        )
+
+        print(f"Current song: {os.path.basename(song)}")
 
         pixmap = QPixmap(cover_path)
         self.player.label.setPixmap(pixmap)
+        self.player.cover_path = cover_path
+
+        row = self.player.current_song
+        if 0 <= row < self.player.song_list.count():
+            self.player.song_list.setCurrentRow(row)
 
     def stop(self):
         self.audio_player.stop()
@@ -194,7 +211,7 @@ class Audio:
 
     def pause(self):
         if self.audio_player.is_playing():
-            self.player.pause_btn.setText("Paused")
+            self.player.pause_btn.setText("Resume")
             self.audio_player.pause()
         else:
             self.player.pause_btn.setText("Pause")
@@ -222,8 +239,34 @@ class Audio:
         if not songs:
             return
 
-        self.player.current_song = (self.player.current_song + 1) % len(songs)
-        self.preset.current_song = self.player.current_song
+        old_index = self.player.current_song
+
+        if self.preset.shuffle:
+            if len(songs) == 1:
+                new_index = 0
+            else:
+                blocked = set(self.recent_shuffle)
+                blocked.add(old_index)
+
+                choices = [i for i in range(len(songs)) if i not in blocked]
+
+                if not choices:
+                    choices = [i for i in range(len(songs)) if i != old_index]
+
+                if not choices:
+                    choices = [old_index]
+
+                new_index = random.choice(choices)
+        else:
+            new_index = (old_index + 1) % len(songs)
+
+        self.history.append(old_index)
+        self.player.current_song = new_index
+        self.preset.current_song = new_index
+
+        if self.preset.shuffle:
+            self.recent_shuffle.append(new_index)
+
         self.play()
 
     def back(self):
@@ -231,9 +274,26 @@ class Audio:
         if not songs:
             return
 
-        self.player.current_song = (self.player.current_song - 1) % len(songs)
+        if self.history:
+            self.player.current_song = self.history.pop()
+        else:
+            self.player.current_song = (self.player.current_song - 1) % len(songs)
+
         self.preset.current_song = self.player.current_song
         self.play()
+
+    def _on_song_end(self):
+        songs = self.player.get_song_list()
+        if not songs:
+            return
+
+        def advance():
+            if self.preset.repeat:
+                self.play()
+            else:
+                self.next()
+
+        QTimer.singleShot(0, advance)
 
     def get_time(self):
         length_ms = self.audio_player.get_length()
@@ -266,69 +326,61 @@ class Player(QWidget):
         self.current_song = self.engine.preset.current_song
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
-        self.setMinimumWidth(980)
+        self.setMinimumSize(1120, 720)
         self.setAcceptDrops(True)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
-        tabs = QTabWidget()
-        root.addWidget(tabs)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
+
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs)
 
         properties_tab = QWidget()
         properties_layout = QVBoxLayout(properties_tab)
-        properties_layout.setContentsMargins(12, 18, 12, 12)
-        properties_layout.setSpacing(12)
+        properties_layout.setContentsMargins(16, 16, 16, 16)
+        properties_layout.setSpacing(14)
 
         songs_tab = QWidget()
         songs_layout = QVBoxLayout(songs_tab)
-        songs_layout.setContentsMargins(12, 18, 12, 12)
-        songs_layout.setSpacing(12)
+        songs_layout.setContentsMargins(16, 16, 16, 16)
+        songs_layout.setSpacing(14)
 
         preset_tab = QWidget()
         preset_layout = QVBoxLayout(preset_tab)
-        preset_layout.setContentsMargins(12, 18, 12, 12)
-        preset_layout.setSpacing(12)
+        preset_layout.setContentsMargins(16, 16, 16, 16)
+        preset_layout.setSpacing(14)
 
-        tabs.addTab(properties_tab, "Properties")
-        tabs.addTab(songs_tab, "Songs")
-        tabs.addTab(preset_tab, "Preset")
+        self.tabs.addTab(properties_tab, "Player")
+        self.tabs.addTab(songs_tab, "Library")
+        self.tabs.addTab(preset_tab, "Preset")
 
-        # Properties
+        # =====================================================
+        #                    SHARED WIDGETS
+        # =====================================================
         self.mute_cb = QCheckBox("Mute")
         self.play_btn = QPushButton("Play")
         self.stop_btn = QPushButton("Stop")
-        self.back_btn = QPushButton("Back")
+        self.back_btn = QPushButton("Previous")
         self.pause_btn = QPushButton("Pause")
         self.next_btn = QPushButton("Next")
         self.shuffle_cb = QCheckBox("Shuffle")
         self.repeat_cb = QCheckBox("Repeat")
+
         self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_value_label = QLabel(f"{int(self.engine.preset.volume)}")
-        self.volume_value_label.setMinimumWidth(36)
-        self.volume_value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        self.play_btn.clicked.connect(self.engine.play)
-        self.stop_btn.clicked.connect(self.engine.stop)
-        self.back_btn.clicked.connect(self.engine.back)
-        self.pause_btn.clicked.connect(self.engine.pause)
-        self.next_btn.clicked.connect(self.engine.next)
-
-        self.mute_cb.stateChanged.connect(self.mute_handler)
-        self.mute_cb.setChecked(self.engine.preset.muted)
-        self.shuffle_cb.setChecked(self.engine.preset.shuffle)
-        self.repeat_cb.setChecked(self.engine.preset.repeat)
-
-        self.volume_slider.valueChanged.connect(self.engine.volume)
         self.volume_slider.setRange(0, 200)
         self.volume_slider.setValue(int(self.engine.preset.volume))
-        self.volume_slider.valueChanged.connect(self._update_volume_label)
-        self._update_volume_label(self.volume_slider.value())
+
+        self.volume_value_label = QLabel(f"{int(self.engine.preset.volume)}%")
+        self.volume_value_label.setObjectName("ValuePill")
+        self.volume_value_label.setMinimumWidth(52)
+        self.volume_value_label.setAlignment(Qt.AlignCenter)
 
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
 
         self.time_label = QLabel("0:00 / 0:00")
+        self.time_label.setObjectName("MutedLabel")
 
         self._dragging_position = False
         self.position_timer = QTimer(self)
@@ -337,15 +389,106 @@ class Player(QWidget):
         self.position_timer.start()
 
         # =====================================================
-        #                    SONGS TAB
+        #                    COVER / NOW PLAYING
         # =====================================================
-        self.song_drag = QLabel("Drag files here", self)
-
         self.label = QLabel()
-        self.label.setFixedSize(150, 150)
-        self.pixmap = QPixmap(self.cover_path)
+        self.label.setObjectName("CoverArt")
+        self.label.setFixedSize(260, 260)
         self.label.setScaledContents(True)
+        self.pixmap = QPixmap(self.cover_path)
         self.label.setPixmap(self.pixmap)
+
+        self.now_playing_title = QLabel("Nothing playing")
+        self.now_playing_title.setObjectName("SongTitle")
+
+        self.now_playing_artist = QLabel("Drag .ogg files into the window")
+        self.now_playing_artist.setObjectName("MutedLabel")
+
+        self.song_list = QListWidget()
+        self.song_list.setObjectName("SongList")
+        self.song_list.setMinimumHeight(260)
+
+        # =====================================================
+        #                    PLAYER TAB
+        # =====================================================
+        now_playing_group = QGroupBox("Now Playing")
+        now_playing_layout = QHBoxLayout(now_playing_group)
+        now_playing_layout.setSpacing(18)
+
+        cover_col = QVBoxLayout()
+        cover_col.addWidget(self.label, alignment=Qt.AlignTop)
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(10)
+        info_col.addStretch(1)
+        info_col.addWidget(self.now_playing_title)
+        info_col.addWidget(self.now_playing_artist)
+
+        progress_wrap = QVBoxLayout()
+        progress_wrap.setSpacing(6)
+        progress_wrap.addWidget(self.position_slider)
+
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(self.time_label)
+        progress_row.addStretch()
+        progress_wrap.addLayout(progress_row)
+
+        info_col.addLayout(progress_wrap)
+
+        volume_group = QGroupBox("Volume")
+        volume_layout = QHBoxLayout(volume_group)
+        volume_layout.addWidget(self.volume_slider, 1)
+        volume_layout.addWidget(self.volume_value_label)
+
+        controls_group = QGroupBox("Playback")
+
+        controls_layout = QVBoxLayout(controls_group)
+        controls_layout.setSpacing(10)
+
+        controls_layout_1 = QHBoxLayout()
+        controls_layout_1.addWidget(self.play_btn)
+        controls_layout_1.addWidget(self.stop_btn)
+
+        controls_layout_2 = QHBoxLayout()
+        controls_layout_2.addWidget(self.back_btn)
+        controls_layout_2.addWidget(self.pause_btn)
+        controls_layout_2.addWidget(self.next_btn)
+
+        controls_layout.addLayout(controls_layout_1)
+        controls_layout.addLayout(controls_layout_2)
+
+        
+        options_group = QGroupBox("Options")
+        options_layout = QHBoxLayout(options_group)
+        options_layout.addWidget(self.shuffle_cb)
+        options_layout.addWidget(self.repeat_cb)
+        options_layout.addWidget(self.mute_cb)
+        options_layout.addStretch()
+
+        info_col.addWidget(volume_group)
+        info_col.addWidget(controls_group)
+        info_col.addWidget(options_group)
+        info_col.addStretch(2)
+
+        now_playing_layout.addLayout(cover_col, 0)
+        now_playing_layout.addLayout(info_col, 1)
+
+        properties_layout.addWidget(now_playing_group)
+        properties_layout.addStretch(1)
+
+        # =====================================================
+        #                    LIBRARY TAB
+        # =====================================================
+        library_group = QGroupBox("Songs")
+        library_layout = QVBoxLayout(library_group)
+
+        library_hint = QLabel("Drop .ogg files anywhere into the window")
+        library_hint.setObjectName("Mut edLabel")
+
+        library_layout.addWidget(library_hint)
+        library_layout.addWidget(self.song_list, 1)
+
+        songs_layout.addWidget(library_group, 1)
 
         # =====================================================
         #                    PRESET TAB
@@ -357,15 +500,17 @@ class Player(QWidget):
         top = QHBoxLayout()
         self.preset_name = QLineEdit()
         self.preset_name.setText(PROFILE_NAME)
-        self.preset_name.setPlaceholderText("Preset name (e.g. 'Clean Voice')")
-        self.save_preset_btn = QPushButton("Save Preset")
+        self.preset_name.setPlaceholderText("Preset name")
+        self.save_preset_btn = QPushButton("Save")
+
         top.addWidget(self.preset_name, 1)
         top.addWidget(self.save_preset_btn)
 
         bottom = QHBoxLayout()
         self.preset_combo = QComboBox()
-        self.load_preset_btn = QPushButton("Load Preset")
-        self.export_preset_btn = QPushButton("Save as Default")
+        self.load_preset_btn = QPushButton("Load")
+        self.export_preset_btn = QPushButton("Set Default")
+
         bottom.addWidget(self.preset_combo, 1)
         bottom.addWidget(self.load_preset_btn)
         bottom.addWidget(self.export_preset_btn)
@@ -375,48 +520,24 @@ class Player(QWidget):
         preset_layout.addStretch(1)
 
         # =====================================================
-        #                    PROPERTIES LAYOUT
-        # =====================================================
-        properties_layout_row_1 = QHBoxLayout()
-        properties_layout_row_1.addWidget(self.play_btn)
-        properties_layout_row_1.addWidget(self.stop_btn)
-
-        properties_layout_row_2 = QHBoxLayout()
-        properties_layout_row_2.addWidget(self.back_btn)
-        properties_layout_row_2.addWidget(self.pause_btn)
-        properties_layout_row_2.addWidget(self.next_btn)
-
-        properties_layout_row_3 = QHBoxLayout()
-        properties_layout_row_3.addWidget(self.shuffle_cb)
-        properties_layout_row_3.addWidget(self.repeat_cb)
-        properties_layout_row_3.addWidget(self.mute_cb)
-        properties_layout_row_3.addStretch()
-
-        properties_layout_row_4 = QHBoxLayout()
-        properties_layout_row_4.addWidget(self.volume_slider)
-        properties_layout_row_4.addWidget(self.volume_value_label)
-
-        properties_layout_row_5 = QHBoxLayout()
-        properties_layout_row_5.addWidget(self.position_slider)
-        properties_layout_row_5.addWidget(self.time_label)
-
-
-        properties_layout.addLayout(properties_layout_row_1)
-        properties_layout.addLayout(properties_layout_row_2)
-        properties_layout.addLayout(properties_layout_row_3)
-        properties_layout.addLayout(properties_layout_row_4)
-        properties_layout.addLayout(properties_layout_row_5)
-
-        # =====================================================
-        #                    SONGS LAYOUT
-        # =====================================================
-
-        songs_layout.addWidget(self.song_drag)
-        songs_layout.addWidget(self.label)
-
-        # =====================================================
         #                    CONNECTIONS
         # =====================================================
+        self.play_btn.clicked.connect(self.engine.play)
+        self.stop_btn.clicked.connect(self.engine.stop)
+        self.back_btn.clicked.connect(self.engine.back)
+        self.pause_btn.clicked.connect(self.engine.pause)
+        self.next_btn.clicked.connect(self.engine.next)
+
+        self.mute_cb.stateChanged.connect(self.mute_handler)
+        self.mute_cb.setChecked(self.engine.preset.muted)
+        self.shuffle_cb.setChecked(self.engine.preset.shuffle)
+        self.repeat_cb.setChecked(self.engine.preset.repeat)
+        self.shuffle_cb.stateChanged.connect(lambda _: self.engine.shuffle())
+        self.repeat_cb.stateChanged.connect(lambda _: self.engine.repeat())
+
+        self.volume_slider.valueChanged.connect(self.engine.volume)
+        self.volume_slider.valueChanged.connect(self._update_volume_label)
+
         self._refresh_preset_dropdown()
 
         self.mute_cb.stateChanged.connect(self._apply_ui_to_engine)
@@ -435,7 +556,11 @@ class Player(QWidget):
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
     def _update_volume_label(self, value):
-        self.volume_value_label.setText(str(value))
+        self.volume_value_label.setText(f"{value}%")
+
+    def _set_now_playing_info(self, artist: str, title: str):
+        self.now_playing_title.setText(title or "Unknown Title")
+        self.now_playing_artist.setText(artist or "Unknown Artist")
 
     def _position_slider_moved(self, value):
         full_time = self.position_slider.maximum()
@@ -466,12 +591,6 @@ class Player(QWidget):
     def _position_slider_pressed(self):
         self._dragging_position = True
 
-    def _position_slider_moved(self, value):
-        full_time = self.position_slider.maximum()
-        self.time_label.setText(
-            f"{self._format_time(value)} / {self._format_time(full_time)}"
-        )
-
     def _position_slider_released(self):
         self._dragging_position = False
         self.engine.set_time(self.position_slider.value())
@@ -481,7 +600,6 @@ class Player(QWidget):
         self.engine.mute()
 
     def dragEnterEvent(self, event):
-        # Check if the dragged object contains file URLs
         if event.mimeData().hasUrls():
             if any(url.toLocalFile().lower().endswith(".ogg") for url in event.mimeData().urls()):
                 event.acceptProposedAction()
@@ -495,16 +613,22 @@ class Player(QWidget):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
 
-            if path.lower().endswith(".ogg") and os.path.isfile(path):
-                if any(d.get("path") == path for d in self.songs.values()):
-                    continue
+            if not path.lower().endswith(".ogg"):
+                continue
 
-                index = str(len(self.songs))
-                self.songs[index] = {"path": path}
+            if not os.path.isfile(path):
+                continue
 
-                last_index = int(index)
-                print(f"Added: {path}")
-                added = True
+            if any(d.get("path") == path for d in self.songs.values()):
+                continue
+
+            index = str(len(self.songs))
+            self.songs[index] = {"path": path}
+            self.song_list.addItem(os.path.basename(path))
+
+            last_index = int(index)
+            added = True
+            print(f"Added: {path}")
 
         if last_index is not None:
             self.current_song = last_index
@@ -531,12 +655,18 @@ class Player(QWidget):
 
                 data["songs"] = [d["path"] for d in self.songs.values() if "path" in d]
                 data.setdefault("preset", {})["current_song"] = self.current_song
+                data.setdefault("theme", self.current_theme.copy())
 
                 with open(PRESET_PATH, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
 
             except Exception as e:
                 print("Failed to update preset songs:", e)
+
+        if added:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def _preset_folder(self, name: str) -> str:
         return os.path.join(APPDATA_DIR, name)
@@ -685,33 +815,59 @@ class Player(QWidget):
         self.cover_path = cover_path
         pixmap = QPixmap(self.cover_path)
         self.label.setPixmap(pixmap)
+        self._set_now_playing_info(artist, title)
         return f"{artist} - {title}"
 
     def _apply_preset_to_ui(self, data: Dict) -> None:
         self._loading_ui = True
+
         theme = data.get("theme", {})
         self.current_theme = DEFAULT_THEME.copy()
         self.current_theme.update(theme)
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
-        
         preset_dict = dict(data.get("preset", {}))
         p = Preset(**preset_dict)
         self.engine.preset = p
 
         loaded_songs = data.get("songs", [])
-        self.songs = {}
-        for i, path in enumerate(loaded_songs):
-            self.songs[str(i)] = {"path": path}
 
-        self.current_song = p.current_song
-        self.setWindowTitle(f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}")
+        self.songs = {}
+        self.song_list.clear()
+
+        for i, path in enumerate(loaded_songs):
+            if not path or not os.path.isfile(path):
+                continue
+
+            self.songs[str(i)] = {"path": path}
+            self.song_list.addItem(os.path.basename(path))
+
+        if self.songs:
+            self.current_song = max(0, min(p.current_song, len(self.songs) - 1))
+        else:
+            self.current_song = 0
+
+        self.engine.preset.current_song = self.current_song
+
         self.mute_cb.setChecked(p.muted)
         self.shuffle_cb.setChecked(p.shuffle)
         self.repeat_cb.setChecked(p.repeat)
         self.volume_slider.setValue(int(p.volume))
         self._update_volume_label(int(p.volume))
         self._apply_ui_to_engine()
+
+        if self.song_list.count() > 0:
+            self.song_list.setCurrentRow(self.current_song)
+            self.setWindowTitle(
+                f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}"
+            )
+        else:
+            self._set_now_playing_info("Unknown Artist", "Nothing playing")
+            self.label.setPixmap(QPixmap(BLANK_PATH))
+            self.setWindowTitle(
+                f"Yet Another Music Player - {self._get_current_preset_name()}"
+            )
+
         self._loading_ui = False
 
     def _apply_ui_to_engine(self) -> None:
