@@ -8,6 +8,7 @@ As if 4-18 it can
 * Read only .ogg files
 * Show embedded images/authors/titles
 * Stuff that most music players have
+* Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
 <img width="1115" height="743" alt="Screenshot-2026-04-18-010848" src="https://github.com/user-attachments/assets/902be9c1-0dbf-4fae-8db3-93b8af32a1b1" />
 
