@@ -1,10 +1,13 @@
 # Every time I worked on it
 # 4-17-26 1:45 AM
 # 4-17-26 11:23 PM
+
+# Wit repeat on, when song ends it doesnt play audio (fix is press stop then play)
+# Pressing Next, Previous, then Next, plays a different song
 import sys
 import os
 from PySide6.QtWidgets import *
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal, QObject
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
@@ -109,7 +112,8 @@ class Preset:
     volume: float = 100 
 
 
-class Audio:
+class Audio(QObject):
+    songEnded = Signal()
     def __init__(self, player) -> None:
         super().__init__()
         self.instance = vlc.Instance(
@@ -217,22 +221,27 @@ class Audio:
             self.player.pause_btn.setText("Pause")
             self.audio_player.pause()
 
-    def shuffle(self):
-        self.preset.shuffle = not self.preset.shuffle
+    def set_shuffle(self, enabled: bool):
+        self.preset.shuffle = bool(enabled)
 
-    def repeat(self):
-        self.preset.repeat = not self.preset.repeat
+    def set_repeat(self, enabled: bool):
+        self.preset.repeat = bool(enabled)
 
-    def mute(self):
-        self.preset.muted = not self.preset.muted
-        self.audio_player.audio_set_volume(0 if self.preset.muted else int(self.preset.volume))
+    def set_muted(self, muted: bool):
+        self.preset.muted = bool(muted)
+        self.audio_player.audio_set_mute(self.preset.muted)
 
-    def volume(self, volume: float):
         if self.preset.muted:
             self.audio_player.audio_set_volume(0)
-            return
+        else:
+            self.audio_player.audio_set_volume(int(self.preset.volume))
+
+    def volume(self, volume: float):
         self.preset.volume = volume
-        self.audio_player.audio_set_volume(int(volume))
+        if self.preset.muted:
+            self.audio_player.audio_set_volume(0)
+        else:
+            self.audio_player.audio_set_volume(int(volume))
 
     def next(self):
         songs = self.player.get_song_list()
@@ -282,18 +291,9 @@ class Audio:
         self.preset.current_song = self.player.current_song
         self.play()
 
-    def _on_song_end(self):
-        songs = self.player.get_song_list()
-        if not songs:
-            return
-
-        def advance():
-            if self.preset.repeat:
-                self.play()
-            else:
-                self.next()
-
-        QTimer.singleShot(0, advance)
+    def _on_song_end(self, event=None):
+        print("Song ended")
+        self.songEnded.emit() 
 
     def get_time(self):
         length_ms = self.audio_player.get_length()
@@ -483,7 +483,7 @@ class Player(QWidget):
         library_layout = QVBoxLayout(library_group)
 
         library_hint = QLabel("Drop .ogg files anywhere into the window")
-        library_hint.setObjectName("Mut edLabel")
+        library_hint.setObjectName("MutedLabel")
 
         library_layout.addWidget(library_hint)
         library_layout.addWidget(self.song_list, 1)
@@ -528,12 +528,12 @@ class Player(QWidget):
         self.pause_btn.clicked.connect(self.engine.pause)
         self.next_btn.clicked.connect(self.engine.next)
 
-        self.mute_cb.stateChanged.connect(self.mute_handler)
+        self.mute_cb.stateChanged.connect(lambda state: self.engine.set_muted(state == Qt.Checked))
         self.mute_cb.setChecked(self.engine.preset.muted)
         self.shuffle_cb.setChecked(self.engine.preset.shuffle)
         self.repeat_cb.setChecked(self.engine.preset.repeat)
-        self.shuffle_cb.stateChanged.connect(lambda _: self.engine.shuffle())
-        self.repeat_cb.stateChanged.connect(lambda _: self.engine.repeat())
+        self.shuffle_cb.stateChanged.connect(lambda state: self.engine.set_shuffle(state == Qt.Checked))
+        self.repeat_cb.stateChanged.connect(lambda state: self.engine.set_repeat(state == Qt.Checked))
 
         self.volume_slider.valueChanged.connect(self.engine.volume)
         self.volume_slider.valueChanged.connect(self._update_volume_label)
@@ -552,52 +552,11 @@ class Player(QWidget):
         self.load_preset_btn.clicked.connect(self._load_preset_file)
         self.export_preset_btn.clicked.connect(self._export_current_preset)
 
+
+        self.engine.songEnded.connect(self._handle_song_end)
+
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
-
-    def _update_volume_label(self, value):
-        self.volume_value_label.setText(f"{value}%")
-
-    def _set_now_playing_info(self, artist: str, title: str):
-        self.now_playing_title.setText(title or "Unknown Title")
-        self.now_playing_artist.setText(artist or "Unknown Artist")
-
-    def _position_slider_moved(self, value):
-        full_time = self.position_slider.maximum()
-        self.time_label.setText(
-            f"{self._format_time(value)} / {self._format_time(full_time)}"
-        )
-
-    def _format_time(self, seconds: int) -> str:
-        minutes = seconds // 60
-        secs = seconds % 60
-        return f"{minutes}:{secs:02d}"
-
-    def _update_position_slider(self):
-        if self._dragging_position:
-            return
-
-        full_time, current_time = self.engine.get_time()
-
-        self.position_slider.blockSignals(True)
-        self.position_slider.setRange(0, max(full_time, 0))
-        self.position_slider.setValue(min(current_time, max(full_time, 0)))
-        self.position_slider.blockSignals(False)
-
-        self.time_label.setText(
-            f"{self._format_time(current_time)} / {self._format_time(full_time)}"
-        )
-
-    def _position_slider_pressed(self):
-        self._dragging_position = True
-
-    def _position_slider_released(self):
-        self._dragging_position = False
-        self.engine.set_time(self.position_slider.value())
-        self._update_position_slider()
-
-    def mute_handler(self):
-        self.engine.mute()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -667,6 +626,16 @@ class Player(QWidget):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+    def get_song_list(self) -> List[str]:
+        songs = []
+
+        for data in self.songs.values():
+            path = data.get("path")
+            if path and os.path.isfile(path):
+                songs.append(path)
+
+        return songs
 
     def _preset_folder(self, name: str) -> str:
         return os.path.join(APPDATA_DIR, name)
@@ -777,17 +746,21 @@ class Player(QWidget):
 
     def _export_current_preset(self) -> None:
         try:
-            preset_name = self._get_current_preset_name()
+            preset_name = self.preset_combo.currentText().strip() or self._get_current_preset_name()
             path = self._preset_path(preset_name)
 
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._current_preset(), f, indent=2)
 
+            self._set_current_preset_name(preset_name)
+            self._refresh_preset_dropdown()
+            self.preset_combo.setCurrentText(preset_name)
+
             QMessageBox.information(
                 self,
-                f"Default Preset: {preset_name}",
-                "Preset saved successfully."
+                "Default preset updated",
+                f'"{preset_name}" is now the default preset.'
             )
         except Exception as e:
             QMessageBox.critical(self, "Preset export failed", str(e))
@@ -800,15 +773,60 @@ class Player(QWidget):
             "theme": self.current_theme.copy(),
         }
 
-    def get_song_list(self) -> List[str]:
-        songs = []
+    def _handle_song_end(self):
+        print("Handling in Qt thread")
 
-        for data in self.songs.values():
-            path = data.get("path")
-            if path and os.path.isfile(path):
-                songs.append(path)
+        songs = self.get_song_list()
+        if not songs:
+            return
 
-        return songs
+        if self.engine.preset.repeat:
+            print("Play")
+            self.engine.play()
+        else:
+            print("Next")
+            self.engine.next()
+
+    def _update_volume_label(self, value):
+        self.volume_value_label.setText(f"{value}%")
+
+    def _set_now_playing_info(self, artist: str, title: str):
+        self.now_playing_title.setText(title or "Unknown Title")
+        self.now_playing_artist.setText(artist or "Unknown Artist")
+
+    def _position_slider_moved(self, value):
+        full_time = self.position_slider.maximum()
+        self.time_label.setText(
+            f"{self._format_time(value)} / {self._format_time(full_time)}"
+        )
+
+    def _format_time(self, seconds: int) -> str:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}:{secs:02d}"
+
+    def _update_position_slider(self):
+        if self._dragging_position:
+            return
+
+        full_time, current_time = self.engine.get_time()
+
+        self.position_slider.blockSignals(True)
+        self.position_slider.setRange(0, max(full_time, 0))
+        self.position_slider.setValue(min(current_time, max(full_time, 0)))
+        self.position_slider.blockSignals(False)
+
+        self.time_label.setText(
+            f"{self._format_time(current_time)} / {self._format_time(full_time)}"
+        )
+
+    def _position_slider_pressed(self):
+        self._dragging_position = True
+
+    def _position_slider_released(self):
+        self._dragging_position = False
+        self.engine.set_time(self.position_slider.value())
+        self._update_position_slider()
 
     def _get_current_song_name(self):
         artist, title, cover_path = self.engine.get_data()
@@ -879,6 +897,9 @@ class Player(QWidget):
         p.repeat = self.repeat_cb.isChecked()
         p.current_song = self.current_song
         p.volume = self.volume_slider.value()
+
+        self.engine.set_muted(p.muted)
+        self.engine.volume(p.volume)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
