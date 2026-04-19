@@ -1,28 +1,32 @@
-# Every time I worked on it
-# 4-17-26 1:45 AM
-# 4-17-26 11:23 PM
+'''
+Every time I worked on it
+  4-17-26 1:45 AM
+  4-17-26 11:23 PM
+  4-19-26 4:26 PM
 
-# Wit repeat on, when song ends it doesnt play audio (fix is press stop then play)
-# Pressing Next, Previous, then Next, plays a different song
+Bugs:
+  Bar is delayed a bit
+
+Future:
+  Windows Media Player doesnt detect it (f6, f7, f8 wont work)
+
+'''
 import sys
 import os
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal, QObject
-from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+from PySide6.QtGui import QPixmap, QFont, QCloseEvent
 from PySide6.QtWidgets import *
 import json
 from dataclasses import dataclass, asdict
 from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Dict, List
 from mutagen.oggvorbis import OggVorbis
 from mutagen.flac import Picture
 import base64
 import requests
 import vlc
-import time
 import random
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
@@ -31,7 +35,6 @@ SETTINGS_PATH = os.path.join(APPDATA_DIR, "settings.json")
 BLANK_PATH = os.path.join(APPDATA_DIR, "blank.png")
 cover_path = BLANK_PATH
 os.makedirs(APPDATA_DIR, exist_ok=True)
-
 
 if not os.path.exists(SETTINGS_PATH):
     with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -85,10 +88,10 @@ def _load_auto_preset(w) -> None:
 @dataclass
 class Preset:
     muted: bool = False
-    shuffle: bool = True
+    shuffle: bool = False
     repeat: bool = False
     current_song: int = 0
-    volume: float = 100 
+    volume: float = 100
 
 
 class Audio(QObject):
@@ -101,10 +104,17 @@ class Audio(QObject):
         )
         self.audio_player = self.instance.media_player_new()
         self.history = deque(maxlen=50)
+        self.forward_history = deque(maxlen=50)
         self.recent_shuffle = deque(maxlen=10)
 
         self.player = player
         self.preset = Preset()
+
+        self._current_media = None
+        self._current_media_path = None
+        self._can_use_forward = False
+        self.play_order = []
+        self.play_order_pos = -1
 
         self._event_manager = self.audio_player.event_manager()
         self._event_manager.event_attach(
@@ -156,27 +166,39 @@ class Audio(QObject):
             print("Failed to read metadata:", e)
             return "Unknown Artist", os.path.basename(current_song), BLANK_PATH
 
-    def play(self):
+    def play(self, force_reload: bool = False):
         song = self.get_current_song()
         if not song:
             QMessageBox.warning(self.player, "No songs", "No songs are loaded.")
             return
+        
+        if not self.play_order:
+            self.play_order = [self.player.current_song]
+            self.play_order_pos = 0
 
         artist, title, cover_path = self.get_data()
 
-        if not hasattr(self, "_current_media_path") or self._current_media_path != song:
+        state = self.audio_player.get_state()
+        must_reload = (
+            force_reload
+            or self._current_media_path != song
+            or self._current_media is None
+            or state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.Error)
+        )
+
+        if must_reload:
             self._current_media = self.instance.media_new(song)
             self._current_media_path = song
             self.audio_player.set_media(self._current_media)
+            self.player._reset_progress_ui()
 
         self.audio_player.play()
+        self.player.pause_btn.setText("Pause")
 
         self.player._set_now_playing_info(artist, title)
         self.player.setWindowTitle(
             f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}"
         )
-
-        print(f"Current song: {os.path.basename(song)}")
 
         pixmap = QPixmap(cover_path)
         self.player.label.setPixmap(pixmap)
@@ -188,17 +210,16 @@ class Audio(QObject):
 
     def stop(self):
         self.audio_player.stop()
-        self.player.position_slider.setRange(0, 0)
-        self.player.position_slider.setValue(0)
-        self.player.time_label.setText("0:00 / 0:00")
+        self.player._reset_progress_ui()
+        self.player.pause_btn.setText("Pause")
+        self._can_use_forward = False
 
     def pause(self):
         if self.audio_player.is_playing():
             self.player.pause_btn.setText("Resume")
-            self.audio_player.pause()
         else:
             self.player.pause_btn.setText("Pause")
-            self.audio_player.pause()
+        self.audio_player.pause()
 
     def set_shuffle(self, enabled: bool):
         self.preset.shuffle = bool(enabled)
@@ -229,46 +250,44 @@ class Audio(QObject):
 
         old_index = self.player.current_song
 
-        if self.preset.shuffle:
-            if len(songs) == 1:
-                new_index = 0
-            else:
-                blocked = set(self.recent_shuffle)
-                blocked.add(old_index)
-
-                choices = [i for i in range(len(songs)) if i not in blocked]
-
-                if not choices:
-                    choices = [i for i in range(len(songs)) if i != old_index]
-
-                if not choices:
-                    choices = [old_index]
-
-                new_index = random.choice(choices)
+        if self.play_order_pos < len(self.play_order) - 1:
+            self.play_order_pos += 1
+            new_index = self.play_order[self.play_order_pos]
         else:
-            new_index = (old_index + 1) % len(songs)
+            if self.preset.shuffle:
+                new_index = self._pick_shuffle_song(old_index, songs)
+                self.recent_shuffle.append(new_index)
+            else:
+                new_index = (old_index + 1) % len(songs)
+
+            self.play_order.append(new_index)
+            self.play_order_pos = len(self.play_order) - 1
 
         self.history.append(old_index)
         self.player.current_song = new_index
         self.preset.current_song = new_index
-
-        if self.preset.shuffle:
-            self.recent_shuffle.append(new_index)
-
-        self.play()
+        self.play(force_reload=True)
 
     def back(self):
         songs = self.player.get_song_list()
         if not songs:
             return
 
-        if self.history:
-            self.player.current_song = self.history.pop()
+        current_index = self.player.current_song
+
+        if self.play_order_pos > 0:
+            self.play_order_pos -= 1
+            previous_index = self.play_order[self.play_order_pos]
+            self.history.append(current_index)
+            self.player.current_song = previous_index
+        elif self.history:
+            previous_index = self.history.pop()
+            self.player.current_song = previous_index
         else:
-            self.player.current_song = (self.player.current_song - 1) % len(songs)
+            self.player.current_song = (current_index - 1) % len(songs)
 
         self.preset.current_song = self.player.current_song
-        self.play()
+        self.play(force_reload=True)
 
     def _on_song_end(self, event=None):
         print("Song ended")
@@ -293,6 +312,27 @@ class Audio(QObject):
             seconds = 0
         self.audio_player.set_time(seconds * 1000)
 
+    def _commit_current_to_timeline(self, index: int):
+        if self.play_order_pos < len(self.play_order) - 1:
+            self.play_order = self.play_order[:self.play_order_pos + 1]
+
+        self.play_order.append(index)
+        self.play_order_pos = len(self.play_order) - 1
+
+    def _pick_shuffle_song(self, old_index: int, songs: list[str]) -> int:
+        if len(songs) == 1:
+            return 0
+
+        blocked = set(self.recent_shuffle)
+        blocked.add(old_index)
+
+        choices = [i for i in range(len(songs)) if i not in blocked]
+        if not choices:
+            choices = [i for i in range(len(songs)) if i != old_index]
+        if not choices:
+            choices = [old_index]
+
+        return random.choice(choices)
 
 
 class Player(QWidget):
@@ -616,6 +656,13 @@ class Player(QWidget):
 
         return songs
 
+    def _reset_progress_ui(self):
+        self.position_slider.blockSignals(True)
+        self.position_slider.setRange(0, 0)
+        self.position_slider.setValue(0)
+        self.position_slider.blockSignals(False)
+        self.time_label.setText("0:00 / 0:00")
+
     def _preset_folder(self, name: str) -> str:
         return os.path.join(APPDATA_DIR, name)
 
@@ -759,11 +806,11 @@ class Player(QWidget):
         if not songs:
             return
 
+        self._reset_progress_ui()
+
         if self.engine.preset.repeat:
-            print("Play")
-            self.engine.play()
+            self.engine.play(force_reload=True)
         else:
-            print("Next")
             self.engine.next()
 
     def _update_volume_label(self, value):
@@ -839,12 +886,23 @@ class Player(QWidget):
             self.songs[str(i)] = {"path": path}
             self.song_list.addItem(os.path.basename(path))
 
+        self.engine.stop()
+        self.engine._current_media = None
+        self.engine._current_media_path = None
+        self.engine.play_order = []
+        self.engine.play_order_pos = -1
+        self.engine.history.clear()
+        self.engine.forward_history.clear()
+        self.engine.recent_shuffle.clear()
+
         if self.songs:
             self.current_song = max(0, min(p.current_song, len(self.songs) - 1))
         else:
             self.current_song = 0
 
         self.engine.preset.current_song = self.current_song
+
+        self.pause_btn.setText("Pause")
 
         self.mute_cb.setChecked(p.muted)
         self.shuffle_cb.setChecked(p.shuffle)
