@@ -16,11 +16,11 @@ As if 4-21 it can
 
 AI slop-ish code, all bug tested though, so it's good.
 
-<img width="1118" height="717" alt="Screenshot-2026-04-21-231446" src="https://github.com/user-attachments/assets/84452e7a-d79b-4701-8905-4313585d5b39" />
+<img width="500" height="322" alt="Screenshot-2026-04-21-231446" src="https://github.com/user-attachments/assets/84452e7a-d79b-4701-8905-4313585d5b39" />
 
-<img width="1118" height="718" alt="Screenshot-2026-04-21-231519" src="https://github.com/user-attachments/assets/88d7cc96-271a-4f55-95e7-abb57d1b8545" />
+<img width="500" height="322" alt="Screenshot-2026-04-21-231519" src="https://github.com/user-attachments/assets/88d7cc96-271a-4f55-95e7-abb57d1b8545" />
 
-<img width="1118" height="717" alt="Screenshot-2026-04-21-231538" src="https://github.com/user-attachments/assets/569ec386-6a08-4313-b5da-dfa6ec8f05a2" />
+<img width="500" height="322" alt="Screenshot-2026-04-21-231538" src="https://github.com/user-attachments/assets/569ec386-6a08-4313-b5da-dfa6ec8f05a2" />
 
-<img width="1119" height="717" alt="Screenshot-2026-04-21-231556" src="https://github.com/user-attachments/assets/f78fa517-c9ec-4bd6-986a-e3dab157b9cc" />
+<img width="500" height="322" alt="Screenshot-2026-04-21-231556" src="https://github.com/user-attachments/assets/f78fa517-c9ec-4bd6-986a-e3dab157b9cc" />
 
