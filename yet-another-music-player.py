@@ -103,6 +103,7 @@ class Preset:
     volume: float = 100
 
 
+
 class LyricStuff(QObject):
     def __init__(self, engine) -> None:
         super().__init__()
@@ -121,6 +122,12 @@ class LyricStuff(QObject):
 
         if os.path.exists(lyric_path):
             return lyric_path
+    
+        if os.path.exists(current_song):
+            lyric_path = os.path.splitext(current_song)[0] + ".lrc"
+            if os.path.exists(lyric_path):
+                return lyric_path
+            pass
 
         return None
 
@@ -184,6 +191,8 @@ class LyricStuff(QObject):
                 break
 
         return current_index
+
+
 
 class Audio(QObject):
     songEnded = Signal()
