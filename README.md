@@ -13,7 +13,7 @@ As if 4-21 it can
 * Stuff that most music players have
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
-Known Issues:
+Known Issues (as of 4-21):
   * Shuffle, Repeat, and Muted are not applied to the engine correctly
   * Tiny delay in lyrics
   * If you go to the next song still in the lyrics tab, it crashes with no errors
