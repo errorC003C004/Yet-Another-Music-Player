@@ -10,6 +10,9 @@ As if 4-18 it can
 * Stuff that most music players have
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
+
+AI slop-ish code, all bug tested though, so it's good.
+
 <img width="1115" height="743" alt="Screenshot-2026-04-18-010848" src="https://github.com/user-attachments/assets/902be9c1-0dbf-4fae-8db3-93b8af32a1b1" />
 
 <img width="1116" height="746" alt="Screenshot-2026-04-18-010909" src="https://github.com/user-attachments/assets/e4d361a1-a76f-467f-b878-d047f8cda7a5" />
