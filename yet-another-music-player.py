@@ -5,6 +5,14 @@ Every time I worked on it
   4-19-26 4:26 PM
   4-20-26 8:22 PM
   4-21-26 9:33 PM
+  4-22-26 10:47 PM
+
+Known Issues:
+  * If you go to the next song still in the lyrics tab, it crashes with no errors (only if the next song is a valid lyric)
+  * _on_playback_state_changed makes the pause button go to "Resume" then immidiately back to "Pause"
+
+Fixed Issues:
+  * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
 
 Future Features:
   * History should be max 50, but changes from the playlist size (if size is 50, history should be 5)
@@ -13,38 +21,61 @@ Future Features:
 '''
 import sys
 import os
-from PySide6.QtWidgets import *
+from winrt.windows.foundation import Uri
+from winrt.windows.media import MediaPlaybackType, MediaPlaybackStatus, SystemMediaTransportControlsButton
+from winrt.windows.media.core import MediaSource
+from winrt.windows.media.playback import MediaPlayer, MediaPlaybackState
+from winrt.windows.storage import StorageFile
+from winrt.windows.storage.streams import RandomAccessStreamReference
+from mutagen import File as MutagenFile
+from mutagen.oggvorbis import OggVorbis
+from mutagen.oggopus import OggOpus
+from mutagen.flac import Picture
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
-from PySide6.QtGui import QPixmap, QFont, QCloseEvent
-from PySide6.QtWidgets import *
-import json
+from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
 from collections import deque
 from pathlib import Path
 from typing import Dict, List
-from mutagen.oggvorbis import OggVorbis
-from mutagen.flac import Picture
+import json
 import base64
 import requests
 import random
 from datetime import timedelta
-
-from winrt.windows.foundation import Uri
-from winrt.windows.media import MediaPlaybackType, MediaPlaybackStatus, SystemMediaTransportControlsButton
-from winrt.windows.media.core import MediaSource
-from winrt.windows.media.playback import MediaPlayer
-from winrt.windows.storage import StorageFile
-from winrt.windows.storage.streams import RandomAccessStreamReference
-
-from mutagen import File as MutagenFile
-from mutagen.oggvorbis import OggVorbis
-from mutagen.oggopus import OggOpus
 import re
+import hashlib
+import logging
+
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
 SETTINGS_PATH = os.path.join(APPDATA_DIR, "settings.json")
 BLANK_PATH = os.path.join(APPDATA_DIR, "blank.png")
+ICON_PATH = os.path.join(APPDATA_DIR, "icon.png")
+LOG_PATH = os.path.join(APPDATA_DIR, "player.log")
 cover_path = BLANK_PATH
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
+
+formatter = logging.Formatter(
+    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG)
+
+console_formatter = logging.Formatter("[%(levelname)s] %(message)s")
+console_handler.setFormatter(console_formatter)
+
+logger.handlers.clear()
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 os.makedirs(APPDATA_DIR, exist_ok=True)
 
 
@@ -66,7 +97,14 @@ if not os.path.exists(BLANK_PATH):
         with open(BLANK_PATH, "wb") as f:
             f.write(get.read())
     except Exception as e:
-        print("Cant Download Blank Image: ", e)
+        logger.warning("Cant Download Blank Image: %s", e)
+if not os.path.exists(ICON_PATH):
+    try:
+        get = requests.get("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/icon.png?raw=true", stream=True, timeout=10).raw
+        with open(ICON_PATH, "wb") as f:
+            f.write(get.read())
+    except Exception as e:
+        logger.warning("Cant Download Blank Image: %s", e)
 
 PROFILE_DIR = os.path.join(APPDATA_DIR, PROFILE_NAME)
 TEMP_DIR = os.path.join(PROFILE_DIR, "Temp")
@@ -91,7 +129,7 @@ def _load_auto_preset(w) -> None:
             data = json.load(f)
         w._apply_preset_to_ui(data)
     except Exception as e:
-        print("Auto-load failed:", e)
+        logger.warning("Auto-load failed: %s", e)
 
 
 @dataclass
@@ -114,7 +152,7 @@ class LyricStuff(QObject):
         current_song = self.engine.get_current_song()
 
         if not current_song:
-            print("No current song")
+            logger.info("No current song")
             return None
 
         song_path_folder = os.path.dirname(current_song)
@@ -196,6 +234,8 @@ class LyricStuff(QObject):
 
 class Audio(QObject):
     songEnded = Signal()
+    playbackStateChanged = Signal(int)
+    mediaOpenedQt = Signal()
     def __init__(self, player) -> None:
         super().__init__()
         self.player = player
@@ -223,6 +263,49 @@ class Audio(QObject):
         self._smtc = self.audio_player.system_media_transport_controls
         self._configure_smtc()
 
+        self.playbackStateChanged.connect(self._apply_playback_state_on_qt_thread)
+        self.mediaOpenedQt.connect(self._apply_media_opened_on_qt_thread)
+
+    def _apply_playback_state_on_qt_thread(self, state_value: int):
+        try:
+            state = MediaPlaybackState(state_value)
+
+            if state == MediaPlaybackState.PLAYING:
+                self.player.pause_btn.setText("Pause")
+            elif state == MediaPlaybackState.PAUSED:
+                self.player.pause_btn.setText("Resume")
+            else:
+                self.player.pause_btn.setText("Pause")
+
+            self._update_smtc_playback_status()
+        except Exception as e:
+            logger.warning("Qt playback-state apply failed: %s", e)
+
+    def _apply_media_opened_on_qt_thread(self):
+        try:
+            artist, title, cover_path = self.get_data()
+
+            self.player._load_lyrics_for_current_song()
+            self.player.pause_btn.setText("Pause")
+
+            self.player._set_now_playing_info(artist, title)
+            self.player.setWindowTitle(
+                f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}"
+            )
+
+            pixmap = QPixmap(cover_path)
+            self.player.label.setPixmap(pixmap)
+            self.player.cover_path = cover_path
+
+            row = self.player.current_song
+            if 0 <= row < self.player.song_list.count():
+                self.player.song_list.setCurrentRow(row)
+
+            self._update_windows_popup(title, artist, cover_path)
+            self._update_smtc_playback_status()
+        except Exception as e:
+            logger.warning("Qt media-opened apply failed: %s", e)
+
     def _configure_smtc(self):
         smtc = self._smtc
         smtc.is_enabled = True
@@ -246,7 +329,7 @@ class Audio(QObject):
             elif button == SystemMediaTransportControlsButton.PREVIOUS:
                 self.back()
         except Exception as e:
-            print("SMTC button event failed:", e)
+            logger.warning("SMTC button event failed: %s", e)
 
     def get_current_song(self):
         index = getattr(self.player, "current_song", 0)
@@ -286,14 +369,15 @@ class Audio(QObject):
                 raw_block = base64.b64decode(pics[0])
                 pic = Picture(raw_block)
                 ext = "jpg" if pic.mime in ("image/jpeg", "image/jpg") else "png"
-                cover_path = os.path.join(TEMP_DIR, f"cover_{abs(hash(current_song))}.{ext}")
+                h = hashlib.sha256(current_song.encode()).hexdigest()
+                cover_path = os.path.join(TEMP_DIR, f"cover_{h}.{ext}")
                 with open(cover_path, "wb") as f:
                     f.write(pic.data)
 
             return artist, title, cover_path
 
         except Exception as e:
-            print("Failed to read metadata:", e)
+            logger.warning("Failed to read metadata: %s", e)
             return "Unknown Artist", os.path.basename(current_song), BLANK_PATH
 
     def _path_to_uri(self, path: str) -> Uri:
@@ -325,8 +409,6 @@ class Audio(QObject):
             self.player._reset_progress_ui()
 
         self.audio_player.play()
-        self.player._load_lyrics_for_current_song()
-        self.player.pause_btn.setText("Pause")
 
         self.player._set_now_playing_info(artist, title)
         self.player.setWindowTitle(
@@ -356,16 +438,14 @@ class Audio(QObject):
         try:
             self._smtc.playback_status = MediaPlaybackStatus.CLOSED
         except Exception as e:
-            print("SMTC stop status failed:", e)
+            logger.warning("SMTC stop status failed: %s", e)
 
     def pause(self):
         state = self._session.playback_state
-        if state == MediaPlaybackStatus.PLAYING:
+        if state == MediaPlaybackState.PLAYING:
             self.audio_player.pause()
-            self.player.pause_btn.setText("Resume")
         else:
             self.audio_player.play()
-            self.player.pause_btn.setText("Pause")
 
     def set_shuffle(self, enabled: bool):
         self.preset.shuffle = bool(enabled)
@@ -450,7 +530,7 @@ class Audio(QObject):
             current_time = self._seconds_from_timespan(self._session.position)
             return full_time, current_time
         except Exception as e:
-            print("get_time failed:", e)
+            logger.warning("get_time failed: %s", e)
             return 0, 0
 
     def set_time(self, seconds: float):
@@ -459,7 +539,7 @@ class Audio(QObject):
         try:
             self._session.position = timedelta(seconds=float(seconds))
         except Exception as e:
-            print("Seek failed:", e)
+            logger.warning("Seek failed: %s", e)
 
     def _commit_current_to_timeline(self, index: int):
         if self.play_order_pos < len(self.play_order) - 1:
@@ -485,18 +565,10 @@ class Audio(QObject):
 
     def _on_playback_state_changed(self, sender, args):
         try:
-            state = self._session.playback_state
-
-            if state == MediaPlaybackStatus.PLAYING:
-                self.player.pause_btn.setText("Pause")
-            elif state == MediaPlaybackStatus.PAUSED:
-                self.player.pause_btn.setText("Resume")
-            elif state == MediaPlaybackStatus.STOPPED:
-                self.player.pause_btn.setText("Pause")
-
-            self._update_smtc_playback_status()
+            state = int(self._session.playback_state)
+            self.playbackStateChanged.emit(state)
         except Exception as e:
-            print("Playback state event failed:", e)
+            logger.warning("Playback state event failed: %s", e)
 
     def _update_windows_popup(self, title, artist, cover_path):
         try:
@@ -510,43 +582,40 @@ class Audio(QObject):
                     import asyncio
                     updater.thumbnail = asyncio.run(self._create_thumbnail_ref(cover_path))
                 except Exception as e:
-                    print("Thumbnail load failed:", e)
+                    logger.warning("Thumbnail load failed: %s", e)
                     updater.thumbnail = None
             else:
                 updater.thumbnail = None
 
             updater.update()
         except Exception as e:
-            print("SMTC update failed:", e)
+            logger.warning("SMTC update failed: %s", e)
 
     def _update_smtc_playback_status(self):
         try:
             state = self._session.playback_state
 
-            if state == MediaPlaybackStatus.PLAYING:
+            if state == MediaPlaybackState.PLAYING:
                 self._smtc.playback_status = MediaPlaybackStatus.PLAYING
-            elif state == MediaPlaybackStatus.PAUSED:
+            elif state == MediaPlaybackState.PAUSED:
                 self._smtc.playback_status = MediaPlaybackStatus.PAUSED
-            elif state == MediaPlaybackStatus.STOPPED:
-                self._smtc.playback_status = MediaPlaybackStatus.STOPPED
             else:
                 self._smtc.playback_status = MediaPlaybackStatus.CLOSED
         except Exception as e:
-            print("SMTC playback status update failed:", e)
+            logger.warning("SMTC playback status update failed: %s", e)
 
     def _on_media_ended(self, sender, args):
         try:
-            self._smtc.playback_status = MediaPlaybackStatus.STOPPED
-            self.player._handle_song_end()
+            self.songEnded.emit()
         except Exception as e:
-            print("Media ended event failed:", e)
+            logger.warning("Media ended event failed: %s", e)
 
     def _on_media_failed(self, sender, args):
         try:
             self._smtc.playback_status = MediaPlaybackStatus.CLOSED
 
-            print("Media failed to play")
-            print("Current song:", self.get_current_song())
+            logger.info("Media failed to play")
+            logger.info("Current song: %s", self.get_current_song())
 
             for name in dir(args):
                 if name.startswith("_"):
@@ -554,20 +623,18 @@ class Audio(QObject):
                 try:
                     value = getattr(args, name)
                     if not callable(value):
-                        print(f"{name}: {value}")
+                        logger.info(f"{name}: {value}")
                 except Exception as ex:
-                    print(f"{name}: <error reading: {ex}>")
+                    logger.warning(f"{name}: <error reading: {ex}>")
 
         except Exception as e:
-            print("Media failed event failed:", e)
+            logger.warning("Media failed event failed: %s", e)
 
     def _on_media_opened(self, sender, args):
         try:
-            artist, title, cover_path = self.get_data()
-            self._update_windows_popup(title, artist, cover_path)
-            self._update_smtc_playback_status()
+            self.mediaOpenedQt.emit()
         except Exception as e:
-            print("Media opened event failed:", e)
+            logger.warning("Media opened event failed: %s", e)
 
     async def _create_thumbnail_ref(self, cover_path: str):
         file = await StorageFile.get_file_from_path_async(str(Path(cover_path).resolve()))
@@ -585,6 +652,7 @@ class Player(QWidget):
         self.current_song = self.engine.preset.current_song
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
+        self.setWindowIcon(QIcon(ICON_PATH))
         self.setMinimumSize(1120, 720)
         self.setAcceptDrops(True)
 
@@ -916,64 +984,77 @@ class Player(QWidget):
         self._play_song_at_index(row)
 
     def _load_lyrics_for_current_song(self):
-        data = self.engine.lyrics.convert_lyrics()
-        self.current_lyrics_data = data["lyrics"] if data else []
+        self.current_lyrics_data = []
         self.current_lyrics_index = -1
 
+        self.lyrics_list.blockSignals(True)
         self.lyrics_list.clear()
 
-        if not self.current_lyrics_data:
-            self.lyrics_status.setText("No lyrics loaded")
-            return
+        try:
+            data = self.engine.lyrics.convert_lyrics()
+            self.current_lyrics_data = data["lyrics"] if data else []
 
-        if data.get("auto_scroll", True):
-            self.lyrics_status.setText("Plain lyrics")
-            if self.engine.lyrics.get_lyrics():
-                not_found = False
-                print("🟡 Plain lyrics")
+            if not self.current_lyrics_data:
+                self.lyrics_status.setText("No lyrics loaded")
+                return
+
+            if data.get("auto_scroll", True):
+                self.lyrics_status.setText("Plain lyrics")
+                logger.info("🟡 Plain lyrics" if self.engine.lyrics.get_lyrics() else "🔴 Lyrics file not found")
             else:
-                not_found = True
-                print("🔴 Lyrics file not found")
-        else:
-            not_found = False
-            self.lyrics_status.setText("Timed lyrics")
-            print("🟢 Timed lyrics")
-        print(os.path.basename(self.engine.get_current_song()))
+                self.lyrics_status.setText("Timed lyrics")
+                logger.info("🟢 Timed lyrics")
 
-        for line in self.current_lyrics_data:
-            text = line.get("text", "")
-            item = QListWidgetItem(text if text else " ")
-            item.setTextAlignment(Qt.AlignCenter)
-            item.setData(Qt.UserRole, line.get("time"))
-            self.lyrics_list.addItem(item)
+            current_song = self.engine.get_current_song()
+            if current_song:
+                logger.info(os.path.basename(current_song))
 
-        self._highlight_current_lyric(-1)
+            for line in self.current_lyrics_data:
+                text = line.get("text", "")
+                item = QListWidgetItem(text if text else " ")
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setData(Qt.UserRole, line.get("time"))
+                self.lyrics_list.addItem(item)
+
+            self._highlight_current_lyric(-1)
+        finally:
+            self.lyrics_list.blockSignals(False)
 
     def _highlight_current_lyric(self, index: int):
         self.current_lyrics_index = index
 
         for i in range(self.lyrics_list.count()):
             item = self.lyrics_list.item(i)
+            if item is None:
+                continue
+
             font = item.font()
 
             if i == index:
                 font.setBold(True)
                 item.setFont(font)
-                item.setForeground(Qt.white)
-                item.setBackground(Qt.transparent)
-                self.lyrics_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                item.setForeground(Qt.GlobalColor.white)
+                item.setBackground(Qt.GlobalColor.transparent)
             else:
                 font.setBold(False)
                 item.setFont(font)
-                item.setForeground(Qt.gray)
-                item.setBackground(Qt.transparent)
+                item.setForeground(Qt.GlobalColor.gray)
+                item.setBackground(Qt.GlobalColor.transparent)
+
+        if 0 <= index < self.lyrics_list.count():
+            item = self.lyrics_list.item(index)
+            if item is not None:
+                self.lyrics_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
 
     def _update_lyrics_highlight(self):
-        if not self.current_lyrics_data:
+        if not self.current_lyrics_data or self.lyrics_list.count() == 0:
             return
 
         full_time, current_time = self.engine.get_time()
         index = self.engine.lyrics.current_lyric_index(current_time, self.current_lyrics_data)
+
+        if index >= self.lyrics_list.count():
+            return
 
         if index != self.current_lyrics_index:
             self._highlight_current_lyric(index)
@@ -1007,7 +1088,7 @@ class Player(QWidget):
 
             last_index = int(index)
             added = True
-            print(f"Added: {path}")
+            logger.info(f"Added: {path}")
 
         if last_index is not None:
             self.current_song = last_index
@@ -1040,7 +1121,7 @@ class Player(QWidget):
                     json.dump(data, f, indent=2)
 
             except Exception as e:
-                print("Failed to update preset songs:", e)
+                logger.warning("Failed to update preset songs: %s", e)
 
         if added:
             event.acceptProposedAction()
@@ -1251,17 +1332,6 @@ class Player(QWidget):
 
         self._update_lyrics_highlight()
 
-        try:
-            state = self.engine._session.playback_state
-            if (
-                full_time > 0
-                and current_time >= max(0, full_time - 1)
-                and state != MediaPlaybackStatus.PLAYING
-            ):
-                self.engine.songEnded.emit()
-        except Exception:
-            pass
-
     def _position_slider_pressed(self):
         self._dragging_position = True
 
@@ -1303,7 +1373,6 @@ class Player(QWidget):
             self.song_list.addItem(os.path.basename(path))
 
         self.engine.stop()
-        self.engine._current_media = None
         self.engine._current_media_path = None
         self.engine.play_order = []
         self.engine.play_order_pos = -1
@@ -1325,7 +1394,7 @@ class Player(QWidget):
         self.repeat_cb.setChecked(p.repeat)
         self.volume_slider.setValue(int(p.volume))
         self._update_volume_label(int(p.volume))
-        self._apply_ui_to_engine()
+        logger.info("loading ui")
 
         if self.song_list.count() > 0:
             self.song_list.setCurrentRow(self.current_song)
@@ -1340,6 +1409,7 @@ class Player(QWidget):
             )
 
         self._loading_ui = False
+        self._apply_ui_to_engine()
 
     def _apply_ui_to_engine(self) -> None:
         if getattr(self, "_loading_ui", False):
@@ -1355,6 +1425,7 @@ class Player(QWidget):
         self.engine.set_repeat(p.repeat)
         self.engine.set_muted(p.muted)
         self.engine.volume(p.volume)
+        logger.info("loaded ui")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
@@ -1362,7 +1433,7 @@ class Player(QWidget):
             with open(PRESET_PATH, "w", encoding="utf-8") as f:
                 json.dump(self._current_preset(), f, indent=2)
         except Exception as e:
-            print("Failed to save preset on exit:", e)
+            logger.warning("Failed to save preset on exit: %s", e)
         #os.system("powershell -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Why did you close me?')\"")
         super().closeEvent(event)
 
