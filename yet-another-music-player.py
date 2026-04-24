@@ -1,18 +1,19 @@
 '''
 Every time I worked on it
   4-17-26 1:45 AM
-  4-17-26 11:23 PM
   4-19-26 4:26 PM
+  4-17-26 11:23 PM
   4-20-26 8:22 PM
   4-21-26 9:33 PM
   4-22-26 10:47 PM
+  4-23-26 7:53 PM
 
 Known Issues:
-  * If you go to the next song still in the lyrics tab, it crashes with no errors (only if the next song is a valid lyric)
   * _on_playback_state_changed makes the pause button go to "Resume" then immidiately back to "Pause"
 
 Fixed Issues:
   * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
+  * If you go to the next song still in the lyrics tab, it crashes with no errors (only if the next song is a valid lyric)
 
 Future Features:
   * History should be max 50, but changes from the playlist size (if size is 50, history should be 5)
@@ -31,7 +32,7 @@ from mutagen import File as MutagenFile
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QTextEdit, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
@@ -54,29 +55,22 @@ BLANK_PATH = os.path.join(APPDATA_DIR, "blank.png")
 ICON_PATH = os.path.join(APPDATA_DIR, "icon.png")
 LOG_PATH = os.path.join(APPDATA_DIR, "player.log")
 cover_path = BLANK_PATH
-
+os.makedirs(APPDATA_DIR, exist_ok=True)
+# Logger thingys
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
-
-formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
-
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.DEBUG)
-
 console_formatter = logging.Formatter("[%(levelname)s] %(message)s")
 console_handler.setFormatter(console_formatter)
-
 logger.handlers.clear()
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-os.makedirs(APPDATA_DIR, exist_ok=True)
 
 
 if not os.path.exists(SETTINGS_PATH):
@@ -139,6 +133,8 @@ class Preset:
     repeat: bool = False
     current_song: int = 0
     volume: float = 100
+    lyrics_window: bool = False
+    floating_lyrics: bool = False
 
 
 
@@ -146,6 +142,73 @@ class LyricStuff(QObject):
     def __init__(self, engine) -> None:
         super().__init__()
         self.engine = engine
+        self.window = None
+        self.floating_window = None
+
+    def show_window(self):
+        if self.window is None:
+            self.window = QWidget()
+            self.window.setWindowTitle("Lyrics")
+            self.window.setMinimumSize(420, 520)
+
+            layout = QVBoxLayout(self.window)
+            layout.setContentsMargins(14, 14, 14, 14)
+
+            self.text = QTextEdit()
+            self.text.setReadOnly(True)
+            layout.addWidget(self.text)
+
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+
+    def show_floating_window(self):
+        if self.floating_window is None:
+            self.floating_window = QWidget()
+            self.floating_window.setWindowTitle("Floating Lyrics")
+            self.floating_window.setMinimumSize(420, 520)
+
+            layout = QVBoxLayout(self.floating_window)
+            layout.setContentsMargins(14, 14, 14, 14)
+
+            self.floating_text = QTextEdit()
+            self.floating_text.setReadOnly(True)
+            layout.addWidget(self.floating_text)
+
+        self.floating_window.show()
+        self.floating_window.raise_()
+        self.floating_window.activateWindow()
+
+    def hide_window(self):
+        if self.window is not None:
+            self.window.hide()
+
+    def hide_floating_window(self):
+        if self.floating_window is not None:
+            self.floating_window.hide()
+
+    def update_window(self, lyrics_data: list, current_index: int = -1):
+        if self.window is None:
+            return 
+
+        lines = []
+        for i, line in enumerate(lyrics_data):
+            text = line.get("text", "")
+            if i == current_index:
+                lines.append(f"> {text}")
+            else:
+                lines.append(text)
+
+        self.text.setPlainText("\n".join(lines))
+
+    def update_floating_window(self, lyrics_data: list, current_index: int = -1):
+        if self.floating_window is None:
+            return 
+
+        lines = []
+        lines.append(lyrics_data[current_index].get("text", ""))
+
+        self.floating_text.setPlainText("\n".join(lines))
 
     def get_lyrics(self):
         artist, title, cover_path = self.engine.get_data()
@@ -171,11 +234,10 @@ class LyricStuff(QObject):
 
     def convert_lyrics(self):
         lyric_path = self.get_lyrics()
-        auto_scroll = True
 
         if not lyric_path:
             return {
-                "auto_scroll": True,
+                "timed": False,
                 "lyrics": [{"time": None, "text": "No lyrics found."}]
             }
 
@@ -183,9 +245,7 @@ class LyricStuff(QObject):
             lyrics = f.read()
 
         time_pattern = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,2}))?\]")
-
-        if time_pattern.search(lyrics):
-            auto_scroll = False
+        timed = bool(time_pattern.search(lyrics))
 
         converted = []
 
@@ -199,22 +259,22 @@ class LyricStuff(QObject):
 
             if matches:
                 text = time_pattern.sub("", line).strip()
-                if not text and not re.search(r"\[\d{1,2}:\d{2}", line):
-                    continue
 
                 for match in matches:
                     minutes = int(match.group(1))
                     seconds = int(match.group(2))
-                    hundredths = int(match.group(3)) if match.group(3) else 0
-                    total_seconds = minutes * 60 + seconds + (hundredths / 100.0)
+                    frac = match.group(3) or "0"
+                    total_seconds = minutes * 60 + seconds + float("0." + frac)
                     converted.append({"time": total_seconds, "text": text})
             else:
                 if re.match(r"^\[[a-zA-Z]+:.*\]$", line):
                     continue
                 converted.append({"time": None, "text": line})
+
         converted.sort(key=lambda x: float("inf") if x["time"] is None else x["time"])
+
         return {
-            "auto_scroll": auto_scroll,
+            "timed": timed,
             "lyrics": converted
         }
 
@@ -229,6 +289,20 @@ class LyricStuff(QObject):
                 break
 
         return current_index
+
+    def set_lyrics(self, enabled: bool):
+        self.engine.preset.lyrics_window = bool(enabled)
+        if enabled:
+            self.show_window()
+        else:
+            self.hide_window()
+
+    def set_floating(self, enabled: bool):
+        self.engine.preset.floating_window = bool(enabled)
+        if enabled:
+            self.show_floating_window()
+        else:
+            self.hide_floating_window()
 
 
 
@@ -254,6 +328,7 @@ class Audio(QObject):
         self._can_use_forward = False
         self.play_order = []
         self.play_order_pos = -1
+        self._metadata_cache = {}
 
         self._session = self.audio_player.playback_session
         self._session.add_playback_state_changed(self._on_playback_state_changed)
@@ -272,6 +347,8 @@ class Audio(QObject):
 
             if state == MediaPlaybackState.PLAYING:
                 self.player.pause_btn.setText("Pause")
+            elif state == MediaPlaybackState.OPENING:
+                self.player.pause_btn.setText("Pause")
             elif state == MediaPlaybackState.PAUSED:
                 self.player.pause_btn.setText("Resume")
             else:
@@ -286,7 +363,6 @@ class Audio(QObject):
             artist, title, cover_path = self.get_data()
 
             self.player._load_lyrics_for_current_song()
-            self.player.pause_btn.setText("Pause")
 
             self.player._set_now_playing_info(artist, title)
             self.player.setWindowTitle(
@@ -303,6 +379,7 @@ class Audio(QObject):
 
             self._update_windows_popup(title, artist, cover_path)
             self._update_smtc_playback_status()
+
         except Exception as e:
             logger.warning("Qt media-opened apply failed: %s", e)
 
@@ -349,32 +426,48 @@ class Audio(QObject):
         if not current_song:
             return "Unknown Artist", "Unknown Title", BLANK_PATH
 
+        cached = self._metadata_cache.get(current_song)
+        if cached:
+            return cached
+
         try:
             mf = MutagenFile(current_song)
+            if mf is None:
+                result = ("Unknown Artist", os.path.basename(current_song), BLANK_PATH)
+                self._metadata_cache[current_song] = result
+                return result
 
-            if isinstance(mf, OggVorbis):
-                audio = mf
-            elif isinstance(mf, OggOpus):
-                audio = mf
-            else:
-                return "Unknown Artist", os.path.basename(current_song), BLANK_PATH
+            artist = "Unknown Artist"
+            title = os.path.splitext(os.path.basename(current_song))[0]
 
-            artist = audio.get("artist", ["Unknown Artist"])[0]
-            title = audio.get("title", ["Unknown Title"])[0]
+            if hasattr(mf, "get"):
+                artist_value = mf.get("artist", ["Unknown Artist"])
+                title_value = mf.get("title", [title])
+                artist = artist_value[0] if isinstance(artist_value, list) else str(artist_value)
+                title = title_value[0] if isinstance(title_value, list) else str(title_value)
 
             cover_path = BLANK_PATH
-            pics = audio.get("metadata_block_picture")
+            pics = mf.get("metadata_block_picture") if hasattr(mf, "get") else None
+
+            pic = None
             if pics:
+                pic = Picture(base64.b64decode(pics[0]))
+            elif hasattr(mf, "pictures") and mf.pictures:
+                pic = mf.pictures[0]
+
+            if pic:
                 os.makedirs(TEMP_DIR, exist_ok=True)
-                raw_block = base64.b64decode(pics[0])
-                pic = Picture(raw_block)
                 ext = "jpg" if pic.mime in ("image/jpeg", "image/jpg") else "png"
                 h = hashlib.sha256(current_song.encode()).hexdigest()
                 cover_path = os.path.join(TEMP_DIR, f"cover_{h}.{ext}")
-                with open(cover_path, "wb") as f:
-                    f.write(pic.data)
 
-            return artist, title, cover_path
+                if not os.path.exists(cover_path):
+                    with open(cover_path, "wb") as f:
+                        f.write(pic.data)
+
+            result = (artist, title, cover_path)
+            self._metadata_cache[current_song] = result
+            return result
 
         except Exception as e:
             logger.warning("Failed to read metadata: %s", e)
@@ -426,6 +519,8 @@ class Audio(QObject):
         if not must_reload:
             self._update_windows_popup(title, artist, cover_path)
             self._update_smtc_playback_status()
+        if self.preset.lyrics_window:
+            self.lyrics.show_window()
 
     def stop(self):
         self.audio_player.pause()
@@ -434,6 +529,7 @@ class Audio(QObject):
         self.player._reset_progress_ui()
         self.player.pause_btn.setText("Pause")
         self._can_use_forward = False
+        self.lyrics.hide_window()
 
         try:
             self._smtc.playback_status = MediaPlaybackStatus.CLOSED
@@ -699,6 +795,8 @@ class Player(QWidget):
         self.next_btn = QPushButton("Next")
         self.shuffle_cb = QCheckBox("Shuffle")
         self.repeat_cb = QCheckBox("Repeat")
+        self.lyrics_window_cb = QCheckBox("Lyrics")
+        self.floating_lyrics_cb = QCheckBox("Floating Lyrics")
 
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
@@ -792,11 +890,23 @@ class Player(QWidget):
 
         
         options_group = QGroupBox("Options")
-        options_layout = QHBoxLayout(options_group)
-        options_layout.addWidget(self.shuffle_cb)
-        options_layout.addWidget(self.repeat_cb)
-        options_layout.addWidget(self.mute_cb)
-        options_layout.addStretch()
+
+        options_layout = QVBoxLayout(options_group)
+        options_layout.setSpacing(10)
+
+        options_layout_1 = QHBoxLayout()
+        options_layout_1.addWidget(self.shuffle_cb)
+        options_layout_1.addWidget(self.repeat_cb)
+        options_layout_1.addWidget(self.mute_cb)
+        options_layout_1.addStretch()
+
+        options_layout_2 = QHBoxLayout()
+        options_layout_2.addWidget(self.lyrics_window_cb)
+        options_layout_2.addWidget(self.floating_lyrics_cb)
+        options_layout_2.addStretch()
+
+        options_layout.addLayout(options_layout_1)
+        options_layout.addLayout(options_layout_2)
 
         info_col.addWidget(volume_group)
         info_col.addWidget(controls_group)
@@ -883,12 +993,16 @@ class Player(QWidget):
         self.pause_btn.clicked.connect(self.engine.pause)
         self.next_btn.clicked.connect(self.engine.next)
 
-        self.mute_cb.stateChanged.connect(lambda state: self.engine.set_muted(state == Qt.Checked))
+        self.mute_cb.stateChanged.connect(lambda state: self.engine.set_muted(state == Qt.CheckState.Checked.value))
         self.mute_cb.setChecked(self.engine.preset.muted)
         self.shuffle_cb.setChecked(self.engine.preset.shuffle)
         self.repeat_cb.setChecked(self.engine.preset.repeat)
-        self.shuffle_cb.stateChanged.connect(lambda state: self.engine.set_shuffle(state == Qt.Checked))
-        self.repeat_cb.stateChanged.connect(lambda state: self.engine.set_repeat(state == Qt.Checked))
+        self.lyrics_window_cb.setChecked(self.engine.preset.lyrics_window)
+        self.floating_lyrics_cb.setChecked(self.engine.preset.floating_lyrics)
+        self.shuffle_cb.stateChanged.connect(lambda state: self.engine.set_shuffle(state == Qt.CheckState.Checked.value))
+        self.repeat_cb.stateChanged.connect(lambda state: self.engine.set_repeat(state == Qt.CheckState.Checked.value))
+        self.lyrics_window_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_lyrics(state == Qt.CheckState.Checked.value))
+        self.floating_lyrics_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_floating(state == Qt.CheckState.Checked.value))
 
         self.volume_slider.valueChanged.connect(self.engine.volume)
         self.volume_slider.valueChanged.connect(self._update_volume_label)
@@ -901,6 +1015,8 @@ class Player(QWidget):
         self.lyrics_list.customContextMenuRequested.connect(self._lyrics_context_menu)
 
         self.mute_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.lyrics_window_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.floating_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.shuffle_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.repeat_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.volume_slider.valueChanged.connect(self._apply_ui_to_engine)
@@ -998,12 +1114,12 @@ class Player(QWidget):
                 self.lyrics_status.setText("No lyrics loaded")
                 return
 
-            if data.get("auto_scroll", True):
-                self.lyrics_status.setText("Plain lyrics")
-                logger.info("🟡 Plain lyrics" if self.engine.lyrics.get_lyrics() else "🔴 Lyrics file not found")
-            else:
+            if data.get("timed", False):
                 self.lyrics_status.setText("Timed lyrics")
                 logger.info("🟢 Timed lyrics")
+            else:
+                self.lyrics_status.setText("Plain lyrics")
+                logger.info("🟡 Plain lyrics" if self.engine.lyrics.get_lyrics() else "🔴 Lyrics file not found")
 
             current_song = self.engine.get_current_song()
             if current_song:
@@ -1017,28 +1133,29 @@ class Player(QWidget):
                 self.lyrics_list.addItem(item)
 
             self._highlight_current_lyric(-1)
+            self.engine.lyrics.update_window(self.current_lyrics_data, -1)
+            self.engine.lyrics.update_floating_window(self.current_lyrics_data, -1)
+
         finally:
             self.lyrics_list.blockSignals(False)
 
     def _highlight_current_lyric(self, index: int):
+        old_index = self.current_lyrics_index
+        if old_index == index:
+            return
+
         self.current_lyrics_index = index
 
-        for i in range(self.lyrics_list.count()):
-            item = self.lyrics_list.item(i)
-            if item is None:
-                continue
+        for i, active in ((old_index, False), (index, True)):
+            if 0 <= i < self.lyrics_list.count():
+                item = self.lyrics_list.item(i)
+                if item is None:
+                    continue
 
-            font = item.font()
-
-            if i == index:
-                font.setBold(True)
+                font = item.font()
+                font.setBold(active)
                 item.setFont(font)
-                item.setForeground(Qt.GlobalColor.white)
-                item.setBackground(Qt.GlobalColor.transparent)
-            else:
-                font.setBold(False)
-                item.setFont(font)
-                item.setForeground(Qt.GlobalColor.gray)
+                item.setForeground(Qt.GlobalColor.white if active else Qt.GlobalColor.gray)
                 item.setBackground(Qt.GlobalColor.transparent)
 
         if 0 <= index < self.lyrics_list.count():
@@ -1046,17 +1163,20 @@ class Player(QWidget):
             if item is not None:
                 self.lyrics_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
 
+        self.engine.lyrics.update_window(self.current_lyrics_data, index)
+        self.engine.lyrics.update_floating_window(self.current_lyrics_data, index)
+
     def _update_lyrics_highlight(self):
         if not self.current_lyrics_data or self.lyrics_list.count() == 0:
             return
 
-        full_time, current_time = self.engine.get_time()
-        index = self.engine.lyrics.current_lyric_index(current_time, self.current_lyrics_data)
-
-        if index >= self.lyrics_list.count():
+        if not any(line.get("time") is not None for line in self.current_lyrics_data):
             return
 
-        if index != self.current_lyrics_index:
+        _, current_time = self.engine.get_time()
+        index = self.engine.lyrics.current_lyric_index(current_time, self.current_lyrics_data)
+
+        if 0 <= index < self.lyrics_list.count() and index != self.current_lyrics_index:
             self._highlight_current_lyric(index)
 
     def dragEnterEvent(self, event):
@@ -1067,13 +1187,15 @@ class Player(QWidget):
         event.ignore()
 
     def dropEvent(self, event):
+        allowed_exts = (".ogg", ".opus", ".oga", ".flac")
+
         added = False
         last_index = None
 
         for url in event.mimeData().urls():
             path = url.toLocalFile()
 
-            if not path.lower().endswith(".ogg"):
+            if not path.lower().endswith(allowed_exts):
                 continue
 
             if not os.path.isfile(path):
@@ -1351,64 +1473,69 @@ class Player(QWidget):
     def _apply_preset_to_ui(self, data: Dict) -> None:
         self._loading_ui = True
 
-        theme = data.get("theme", {})
-        self.current_theme = DEFAULT_THEME.copy()
-        self.current_theme.update(theme)
-        apply_theme(QApplication.instance(), {"theme": self.current_theme})
+        try:
+            theme = data.get("theme", {})
+            self.current_theme = DEFAULT_THEME.copy()
+            self.current_theme.update(theme)
+            apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
-        preset_dict = dict(data.get("preset", {}))
-        p = Preset(**preset_dict)
-        self.engine.preset = p
+            preset_dict = dict(data.get("preset", {}))
+            valid = {k: v for k, v in preset_dict.items() if k in Preset.__dataclass_fields__}
+            p = Preset(**valid)
+            self.engine.preset = p
 
-        loaded_songs = data.get("songs", [])
+            loaded_songs = data.get("songs", [])
 
-        self.songs = {}
-        self.song_list.clear()
+            self.songs = {}
+            self.song_list.clear()
 
-        for i, path in enumerate(loaded_songs):
-            if not path or not os.path.isfile(path):
-                continue
+            for path in loaded_songs:
+                if not path or not os.path.isfile(path):
+                    continue
 
-            self.songs[str(i)] = {"path": path}
-            self.song_list.addItem(os.path.basename(path))
+                index = str(len(self.songs))
+                self.songs[index] = {"path": path}
+                self.song_list.addItem(os.path.basename(path))
 
-        self.engine.stop()
-        self.engine._current_media_path = None
-        self.engine.play_order = []
-        self.engine.play_order_pos = -1
-        self.engine.history.clear()
-        self.engine.forward_history.clear()
-        self.engine.recent_shuffle.clear()
+            self.engine.stop()
+            self.engine._current_media_path = None
+            self.engine.play_order = []
+            self.engine.play_order_pos = -1
+            self.engine.history.clear()
+            self.engine.recent_shuffle.clear()
 
-        if self.songs:
-            self.current_song = max(0, min(p.current_song, len(self.songs) - 1))
-        else:
-            self.current_song = 0
+            if self.songs:
+                self.current_song = max(0, min(p.current_song, len(self.songs) - 1))
+            else:
+                self.current_song = 0
 
-        self.engine.preset.current_song = self.current_song
+            self.engine.preset.current_song = self.current_song
 
-        self.pause_btn.setText("Pause")
+            self.pause_btn.setText("Pause")
 
-        self.mute_cb.setChecked(p.muted)
-        self.shuffle_cb.setChecked(p.shuffle)
-        self.repeat_cb.setChecked(p.repeat)
-        self.volume_slider.setValue(int(p.volume))
-        self._update_volume_label(int(p.volume))
-        logger.info("loading ui")
+            self.mute_cb.setChecked(p.muted)
+            self.lyrics_window_cb.setChecked(p.lyrics_window)
+            self.floating_lyrics_cb.setChecked(p.floating_lyrics)
+            self.shuffle_cb.setChecked(p.shuffle)
+            self.repeat_cb.setChecked(p.repeat)
+            self.volume_slider.setValue(int(p.volume))
+            self._update_volume_label(int(p.volume))
 
-        if self.song_list.count() > 0:
-            self.song_list.setCurrentRow(self.current_song)
-            self.setWindowTitle(
-                f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}"
-            )
-        else:
-            self._set_now_playing_info("Unknown Artist", "Nothing playing")
-            self.label.setPixmap(QPixmap(BLANK_PATH))
-            self.setWindowTitle(
-                f"Yet Another Music Player - {self._get_current_preset_name()}"
-            )
+            if self.song_list.count() > 0:
+                self.song_list.setCurrentRow(self.current_song)
+                self.setWindowTitle(
+                    f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}"
+                )
+            else:
+                self._set_now_playing_info("Unknown Artist", "Nothing playing")
+                self.label.setPixmap(QPixmap(BLANK_PATH))
+                self.setWindowTitle(
+                    f"Yet Another Music Player - {self._get_current_preset_name()}"
+                )
 
-        self._loading_ui = False
+        finally:
+            self._loading_ui = False
+
         self._apply_ui_to_engine()
 
     def _apply_ui_to_engine(self) -> None:
@@ -1416,6 +1543,8 @@ class Player(QWidget):
             return
         p = self.engine.preset
         p.muted = self.mute_cb.isChecked()
+        p.lyrics_window = self.lyrics_window_cb.isChecked()
+        p.floating_lyrics = self.floating_lyrics_cb.isChecked()
         p.shuffle = self.shuffle_cb.isChecked()
         p.repeat = self.repeat_cb.isChecked()
         p.current_song = self.current_song
@@ -1425,13 +1554,22 @@ class Player(QWidget):
         self.engine.set_repeat(p.repeat)
         self.engine.set_muted(p.muted)
         self.engine.volume(p.volume)
-        logger.info("loaded ui")
+        logger.info("settings changed/applied")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
             os.makedirs(os.path.dirname(PRESET_PATH), exist_ok=True)
             with open(PRESET_PATH, "w", encoding="utf-8") as f:
                 json.dump(self._current_preset(), f, indent=2)
+
+            self.engine.stop()
+            if self.engine.lyrics.window is not None:
+                self.engine.lyrics.window.close()
+                self.engine.lyrics.window = None
+
+            if self.engine.lyrics.floating_window is not None:
+                self.engine.lyrics.floating_window.close()
+                self.engine.lyrics.floating_window = None
         except Exception as e:
             logger.warning("Failed to save preset on exit: %s", e)
         #os.system("powershell -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Why did you close me?')\"")
@@ -1636,6 +1774,20 @@ QLabel {{
     color: {text};
     background-color: transparent;
 }}
+
+QLabel#LyricsLabel {{
+    background-color: {lyrics_bg};
+    color: {lyrics_text};
+    border-radius: 10px;
+    padding: 12px;
+}}
+
+QLabel#FloatingLyricsLabel {{
+    background-color: {floating_lyrics_bg};
+    color: {floating_lyrics_text};
+    border-radius: 10px;
+    padding: 12px;
+}}
 """
 
 DEFAULT_THEME = {
@@ -1663,6 +1815,12 @@ DEFAULT_THEME = {
     "slider_bg": "#1b2030",
 
     "disabled_text": "#677284",
+
+    "lyrics_bg": "#1f2430",
+    "lyrics_text": "#e6e9ef",
+
+    "floating_lyrics_bg": "#1f2430",
+    "floating_lyrics_text": "#e6e9ef"
 }
 
 def apply_theme(app: QApplication, settings: dict):
