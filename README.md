@@ -13,10 +13,8 @@ As if 4-21 it can
 * Stuff that most music players have
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
-Known Issues (as of 4-21):
-  * Shuffle, Repeat, and Muted are not applied to the engine correctly
-  * Tiny delay in lyrics
-  * If you go to the next song still in the lyrics tab, it crashes with no errors
+Known Issues (as of 4-23):
+  * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
 
 AI slop-ish code, all bug tested though, so it's good.
 
