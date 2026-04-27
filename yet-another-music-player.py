@@ -7,9 +7,14 @@ Every time I worked on it
   4-21-26 9:33 PM
   4-22-26 10:47 PM
   4-23-26 7:53 PM
+  4-26-26 7:44 PM
 
 Known Issues:
-  * _on_playback_state_changed makes the pause button go to "Resume" then immidiately back to "Pause"
+  * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
+  * Lyrics Window 
+  - 1) Refreshes scroll every new update 
+  - 2) Doesnt auto scroll
+  * Crash with no errors when lyrics window is open and you press next song via windows media (normal next doesnt crash)
 
 Fixed Issues:
   * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
@@ -33,7 +38,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.flac import Picture
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QTextEdit, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -138,6 +143,169 @@ class Preset:
 
 
 
+class LyricsPopupWindow(QWidget):
+    def __init__(self, title="Lyrics", minimum_size=(420, 120), show_all=False):
+        super().__init__()
+
+        self.show_all = show_all
+
+        self.setWindowTitle(title)
+        self.setMinimumSize(*minimum_size)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+
+        self._drag_ready = False
+        self._dragging = False
+        self._drag_offset = QPoint()
+
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(1000)
+        self._hover_timer.timeout.connect(self._enable_drag_ready)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        self.box = QWidget()
+        self.box.setObjectName("FloatingLyricsBox")
+        self.box.setMouseTracking(True)
+        self.box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        box_layout = QVBoxLayout(self.box)
+        box_layout.setContentsMargins(16, 12, 16, 12)
+
+        self.label = QLabel("")
+        self.label.setObjectName("FloatingLyricsText")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setWordWrap(True)
+        self.label.setMouseTracking(True)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        box_layout.addWidget(self.label)
+        layout.addWidget(self.box)
+
+        self._set_idle_style()
+
+    def set_text(self, text: str):
+        self.label.setText(text or "")
+
+    def set_lyrics(self, lyrics_data: list, current_index: int = -1):
+        if not self.show_all:
+            if 0 <= current_index < len(lyrics_data):
+                self.set_text(lyrics_data[current_index].get("text", ""))
+            else:
+                self.set_text("")
+            return
+
+        max_lines = 15
+        total = len(lyrics_data)
+
+        if total == 0:
+            self.label.setText("")
+            return
+
+        if current_index < 0:
+            current_index = 0
+        elif current_index >= total:
+            current_index = total - 1
+
+        half = max_lines // 2
+
+        start = current_index - half
+        end = start + max_lines
+
+        if start < 0:
+            start = 0
+            end = min(max_lines, total)
+
+        if end > total:
+            end = total
+            start = max(0, end - max_lines)
+
+        lines = []
+
+        for i in range(start, end):
+            line = lyrics_data[i]
+            text = line.get("text", "")
+
+            if not text.strip():
+                text = "♫"
+
+            if i == current_index:
+                lines.append(
+                    f'<div style="font-size:22px; font-weight:700; color:white; margin:8px 0;">{text}</div>'
+                )
+            else:
+                lines.append(
+                    f'<div style="font-size:16px; font-weight:500; color:rgba(255,255,255,120); margin:5px 0;">{text}</div>'
+                )
+
+        self.label.setText("".join(lines))
+
+    def _apply_style(self, alpha):
+        self.box.setStyleSheet(f"""
+            QWidget#FloatingLyricsBox {{
+                background-color: rgba(31, 36, 48, {alpha});
+                border-radius: 12px;
+            }}
+            QLabel#FloatingLyricsText {{
+                background-color: transparent;
+                color: white;
+                font-size: 22px;
+                font-weight: 700;
+            }}
+        """)
+
+    def _set_idle_style(self):
+        self._drag_ready = False
+        self._dragging = False
+        self._apply_style(0)
+
+    def _set_hover_style(self):
+        self._apply_style(120)
+
+    def _enable_drag_ready(self):
+        self._drag_ready = True
+        self._apply_style(210)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+    def enterEvent(self, event):
+        self._set_hover_style()
+        self._hover_timer.start()
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover_timer.stop()
+        self.unsetCursor()
+        self._set_idle_style()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if self._drag_ready and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
+
+
 class LyricStuff(QObject):
     def __init__(self, engine) -> None:
         super().__init__()
@@ -147,16 +315,11 @@ class LyricStuff(QObject):
 
     def show_window(self):
         if self.window is None:
-            self.window = QWidget()
-            self.window.setWindowTitle("Lyrics")
-            self.window.setMinimumSize(420, 520)
-
-            layout = QVBoxLayout(self.window)
-            layout.setContentsMargins(14, 14, 14, 14)
-
-            self.text = QTextEdit()
-            self.text.setReadOnly(True)
-            layout.addWidget(self.text)
+            self.window = LyricsPopupWindow(
+                title="Lyrics",
+                minimum_size=(520, 520),
+                show_all=True
+            )
 
         self.window.show()
         self.window.raise_()
@@ -164,20 +327,14 @@ class LyricStuff(QObject):
 
     def show_floating_window(self):
         if self.floating_window is None:
-            self.floating_window = QWidget()
-            self.floating_window.setWindowTitle("Floating Lyrics")
-            self.floating_window.setMinimumSize(420, 520)
-
-            layout = QVBoxLayout(self.floating_window)
-            layout.setContentsMargins(14, 14, 14, 14)
-
-            self.floating_text = QTextEdit()
-            self.floating_text.setReadOnly(True)
-            layout.addWidget(self.floating_text)
+            self.floating_window = LyricsPopupWindow(
+                title="Floating Lyrics",
+                minimum_size=(420, 120),
+                show_all=False
+            )
 
         self.floating_window.show()
         self.floating_window.raise_()
-        self.floating_window.activateWindow()
 
     def hide_window(self):
         if self.window is not None:
@@ -189,26 +346,15 @@ class LyricStuff(QObject):
 
     def update_window(self, lyrics_data: list, current_index: int = -1):
         if self.window is None:
-            return 
+            return
 
-        lines = []
-        for i, line in enumerate(lyrics_data):
-            text = line.get("text", "")
-            if i == current_index:
-                lines.append(f"> {text}")
-            else:
-                lines.append(text)
-
-        self.text.setPlainText("\n".join(lines))
+        self.window.set_lyrics(lyrics_data, current_index)
 
     def update_floating_window(self, lyrics_data: list, current_index: int = -1):
         if self.floating_window is None:
-            return 
+            return
 
-        lines = []
-        lines.append(lyrics_data[current_index].get("text", ""))
-
-        self.floating_text.setPlainText("\n".join(lines))
+        self.floating_window.set_lyrics(lyrics_data, current_index)
 
     def get_lyrics(self):
         artist, title, cover_path = self.engine.get_data()
@@ -252,7 +398,7 @@ class LyricStuff(QObject):
         for raw_line in lyrics.splitlines():
             line = raw_line.strip()
             if not line:
-                converted.append({"time": None, "text": ""})
+                converted.append({"time": None, "text": " "})
                 continue
 
             matches = list(time_pattern.finditer(line))
@@ -298,7 +444,7 @@ class LyricStuff(QObject):
             self.hide_window()
 
     def set_floating(self, enabled: bool):
-        self.engine.preset.floating_window = bool(enabled)
+        self.engine.preset.floating_lyrics = bool(enabled)
         if enabled:
             self.show_floating_window()
         else:
@@ -310,6 +456,7 @@ class Audio(QObject):
     songEnded = Signal()
     playbackStateChanged = Signal(int)
     mediaOpenedQt = Signal()
+    smtcButtonPressedQt = Signal(int)
     def __init__(self, player) -> None:
         super().__init__()
         self.player = player
@@ -340,6 +487,7 @@ class Audio(QObject):
 
         self.playbackStateChanged.connect(self._apply_playback_state_on_qt_thread)
         self.mediaOpenedQt.connect(self._apply_media_opened_on_qt_thread)
+        self.smtcButtonPressedQt.connect(self._handle_smtc_button_on_qt_thread)
 
     def _apply_playback_state_on_qt_thread(self, state_value: int):
         try:
@@ -395,7 +543,13 @@ class Audio(QObject):
 
     def _on_smtc_button_pressed(self, sender, args):
         try:
-            button = args.button
+            self.smtcButtonPressedQt.emit(int(args.button))
+        except Exception as e:
+            logger.warning("SMTC button event failed: %s", e)
+
+    def _handle_smtc_button_on_qt_thread(self, button_value: int):
+        try:
+            button = SystemMediaTransportControlsButton(button_value)
 
             if button == SystemMediaTransportControlsButton.PLAY:
                 self.play()
@@ -405,8 +559,9 @@ class Audio(QObject):
                 self.next()
             elif button == SystemMediaTransportControlsButton.PREVIOUS:
                 self.back()
+
         except Exception as e:
-            logger.warning("SMTC button event failed: %s", e)
+            logger.warning("SMTC Qt-thread button handling failed: %s", e)
 
     def get_current_song(self):
         index = getattr(self.player, "current_song", 0)
@@ -581,6 +736,7 @@ class Audio(QObject):
         self.player.current_song = new_index
         self.preset.current_song = new_index
         self.play(force_reload=True)
+        self.player._autosave_current_preset()
 
     def back(self):
         songs = self.player.get_song_list()
@@ -602,6 +758,7 @@ class Audio(QObject):
 
         self.preset.current_song = self.player.current_song
         self.play(force_reload=True)
+        self.player._autosave_current_preset()
 
     def _seconds_from_timespan(self, value) -> float:
         if value is None:
@@ -744,6 +901,10 @@ class Player(QWidget):
         self.engine = Audio(self)
         self.songs: Dict[str, Dict] = {}
         self._loading_ui = False
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(250)
+        self._autosave_timer.timeout.connect(self._save_current_preset_silent)
         self.cover_path = BLANK_PATH
         self.current_song = self.engine.preset.current_song
 
@@ -1034,6 +1195,30 @@ class Player(QWidget):
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
+    def _save_current_preset_silent(self) -> None:
+        if getattr(self, "_loading_ui", False):
+            return
+
+        try:
+            os.makedirs(os.path.dirname(PRESET_PATH), exist_ok=True)
+            with open(PRESET_PATH, "w", encoding="utf-8") as f:
+                json.dump(self._current_preset(), f, indent=2)
+            logger.info("preset autosaved")
+        except Exception as e:
+            logger.warning("Preset autosave failed: %s", e)
+
+    def _autosave_current_preset(self) -> None:
+        if getattr(self, "_loading_ui", False):
+            return
+
+        if not hasattr(self, "_autosave_timer"):
+            self._autosave_timer = QTimer(self)
+            self._autosave_timer.setSingleShot(True)
+            self._autosave_timer.setInterval(250)
+            self._autosave_timer.timeout.connect(self._save_current_preset_silent)
+
+        self._autosave_timer.start()
+
     def _lyrics_context_menu(self, pos):
         item = self.lyrics_list.itemAt(pos)
         if item is None:
@@ -1094,6 +1279,7 @@ class Player(QWidget):
             self.engine._commit_current_to_timeline(row)
 
         self.engine.play(force_reload=True)
+        self._autosave_current_preset()
 
     def _library_item_double_clicked(self, item):
         row = self.song_list.row(item)
@@ -1127,7 +1313,12 @@ class Player(QWidget):
 
             for line in self.current_lyrics_data:
                 text = line.get("text", "")
-                item = QListWidgetItem(text if text else " ")
+
+                if not text.strip():
+                    text = "♫"
+                    line["text"] = text
+
+                item = QListWidgetItem(text)
                 item.setTextAlignment(Qt.AlignCenter)
                 item.setData(Qt.UserRole, line.get("time"))
                 self.lyrics_list.addItem(item)
@@ -1227,24 +1418,8 @@ class Player(QWidget):
             )
 
         if added:
-            try:
-                os.makedirs(os.path.dirname(PRESET_PATH), exist_ok=True)
-
-                data = {}
-                if os.path.exists(PRESET_PATH):
-                    with open(PRESET_PATH, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-
-                data["songs"] = [d["path"] for d in self.songs.values() if "path" in d]
-                data.setdefault("preset", {})["current_song"] = self.current_song
-                data.setdefault("theme", self.current_theme.copy())
-
-                with open(PRESET_PATH, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-
-            except Exception as e:
-                logger.warning("Failed to update preset songs: %s", e)
-
+            self._autosave_current_preset()
+    
         if added:
             event.acceptProposedAction()
         else:
@@ -1541,6 +1716,7 @@ class Player(QWidget):
     def _apply_ui_to_engine(self) -> None:
         if getattr(self, "_loading_ui", False):
             return
+
         p = self.engine.preset
         p.muted = self.mute_cb.isChecked()
         p.lyrics_window = self.lyrics_window_cb.isChecked()
@@ -1554,15 +1730,16 @@ class Player(QWidget):
         self.engine.set_repeat(p.repeat)
         self.engine.set_muted(p.muted)
         self.engine.volume(p.volume)
+
         logger.info("settings changed/applied")
+        self._autosave_current_preset()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
-            os.makedirs(os.path.dirname(PRESET_PATH), exist_ok=True)
-            with open(PRESET_PATH, "w", encoding="utf-8") as f:
-                json.dump(self._current_preset(), f, indent=2)
+            self._save_current_preset_silent()
 
             self.engine.stop()
+
             if self.engine.lyrics.window is not None:
                 self.engine.lyrics.window.close()
                 self.engine.lyrics.window = None
@@ -1570,9 +1747,10 @@ class Player(QWidget):
             if self.engine.lyrics.floating_window is not None:
                 self.engine.lyrics.floating_window.close()
                 self.engine.lyrics.floating_window = None
+
         except Exception as e:
-            logger.warning("Failed to save preset on exit: %s", e)
-        #os.system("powershell -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Why did you close me?')\"")
+            logger.warning("Failed during exit cleanup: %s", e)
+
         super().closeEvent(event)
 
 
