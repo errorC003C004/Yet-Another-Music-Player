@@ -16,8 +16,6 @@ As if 5-03 it can
 Known Issues (as of 4-23):
   * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
 
-AI slop-ish code, all bug tested though, so it's good.
-
 Photos as of 4-21
 
 <img width="500" height="322" alt="Screenshot-2026-04-21-231446" src="https://github.com/user-attachments/assets/84452e7a-d79b-4701-8905-4313585d5b39" />
