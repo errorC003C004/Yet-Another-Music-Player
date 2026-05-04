@@ -8,21 +8,26 @@ Every time I worked on it
   4-22-26 10:47 PM
   4-23-26 7:53 PM
   4-26-26 7:44 PM
+  5-03-26 8:31 PM
 
 Known Issues:
   * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
-  * Lyrics Window 
-  - 1) Refreshes scroll every new update 
-  - 2) Doesnt auto scroll
-  * Crash with no errors when lyrics window is open and you press next song via windows media (normal next doesnt crash)
 
 Fixed Issues:
   * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
   * If you go to the next song still in the lyrics tab, it crashes with no errors (only if the next song is a valid lyric)
+  * Crash with no errors when lyrics window is open and you press next song via windows media (normal next doesnt crash)
+  * Lyrics Window 
+  - 1) Doesnt auto scroll (same with lyrics tab)
+  - 2) If lyrics is plain, it doesnt auto scroll (it makes first line always bold)
+
+Added Features:
+  * .lrc file support wit a window, and clickthrough window
+  * Pressing Del on Libary Tab Deletes Selected
+  * Ctrl + A On Libary Tab Selects All
 
 Future Features:
-  * History should be max 50, but changes from the playlist size (if size is 50, history should be 5)
-  * .lrc file support wit a window, and clickthrough window
+  * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
 
 '''
 import sys
@@ -44,6 +49,7 @@ from dataclasses import dataclass, asdict
 from collections import deque
 from pathlib import Path
 from typing import Dict, List
+from shiboken6 import isValid
 import json
 import base64
 import requests
@@ -63,7 +69,7 @@ cover_path = BLANK_PATH
 os.makedirs(APPDATA_DIR, exist_ok=True)
 # Logger thingys
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 logger.propagate = False
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
@@ -193,7 +199,7 @@ class LyricsPopupWindow(QWidget):
     def set_text(self, text: str):
         self.label.setText(text or "")
 
-    def set_lyrics(self, lyrics_data: list, current_index: int = -1):
+    def set_lyrics(self, lyrics_data: list, current_index: int = -1, highlight: bool = True):
         if not self.show_all:
             if 0 <= current_index < len(lyrics_data):
                 self.set_text(lyrics_data[current_index].get("text", ""))
@@ -214,7 +220,6 @@ class LyricsPopupWindow(QWidget):
             current_index = total - 1
 
         half = max_lines // 2
-
         start = current_index - half
         end = start + max_lines
 
@@ -229,13 +234,12 @@ class LyricsPopupWindow(QWidget):
         lines = []
 
         for i in range(start, end):
-            line = lyrics_data[i]
-            text = line.get("text", "")
+            text = lyrics_data[i].get("text", "")
 
             if not text.strip():
                 text = "♫"
 
-            if i == current_index:
+            if highlight and i == current_index:
                 lines.append(
                     f'<div style="font-size:22px; font-weight:700; color:white; margin:8px 0;">{text}</div>'
                 )
@@ -304,7 +308,22 @@ class LyricsPopupWindow(QWidget):
         self._dragging = False
         super().mouseReleaseEvent(event)
 
+    def wheelEvent(self, event):
+        if not self._drag_ready:
+            return
+        if not hasattr(self, "_scroll_callback") or self._scroll_callback is None:
+            return
 
+        delta = event.angleDelta().y()
+
+        if delta == 0:
+            return
+
+        direction = 1 if delta < 0 else -1
+        self._scroll_callback(direction)
+
+    def set_scroll_callback(self, callback):
+        self._scroll_callback = callback
 
 class LyricStuff(QObject):
     def __init__(self, engine) -> None:
@@ -333,6 +352,7 @@ class LyricStuff(QObject):
                 show_all=False
             )
 
+        self.floating_window.set_scroll_callback(self._handle_scroll)
         self.floating_window.show()
         self.floating_window.raise_()
 
@@ -344,11 +364,11 @@ class LyricStuff(QObject):
         if self.floating_window is not None:
             self.floating_window.hide()
 
-    def update_window(self, lyrics_data: list, current_index: int = -1):
+    def update_window(self, lyrics_data: list, current_index: int = -1, highlight: bool = True):
         if self.window is None:
             return
 
-        self.window.set_lyrics(lyrics_data, current_index)
+        self.window.set_lyrics(lyrics_data, current_index, highlight)
 
     def update_floating_window(self, lyrics_data: list, current_index: int = -1):
         if self.floating_window is None:
@@ -450,6 +470,37 @@ class LyricStuff(QObject):
         else:
             self.hide_floating_window()
 
+    def _handle_scroll(self, direction: int):
+        if not hasattr(self.engine.player, "current_lyrics_data"):
+            return
+
+        player = self.engine.player
+        data = player.current_lyrics_data
+
+        if not data:
+            return
+
+        if player.current_lyrics_timed:
+            current_index = player.current_lyrics_index
+
+            if current_index < 0:
+                current_index = 0
+
+            new_index = max(0, min(len(data) - 1, current_index + direction))
+
+            time = data[new_index].get("time")
+            if time is not None:
+                self.engine.set_time(float(time))
+
+        else:
+            current_index = player.current_lyrics_index
+
+            if current_index < 0:
+                current_index = 0
+
+            new_index = max(0, min(len(data) - 1, current_index + direction))
+
+            player._highlight_current_lyric(new_index, force=True)
 
 
 class Audio(QObject):
@@ -889,15 +940,44 @@ class Audio(QObject):
         except Exception as e:
             logger.warning("Media opened event failed: %s", e)
 
+    def _update_history_limit(self):
+        songs = self.player.get_song_list()
+        size = len(songs)
+
+        if size <= 0:
+            new_limit = 50
+        else:
+            new_limit = max(3, min(50, size // 8))
+        self.history = deque(list(self.history), maxlen=new_limit)
+        self.forward_history = deque(list(self.forward_history), maxlen=new_limit)
+
     async def _create_thumbnail_ref(self, cover_path: str):
         file = await StorageFile.get_file_from_path_async(str(Path(cover_path).resolve()))
         return RandomAccessStreamReference.create_from_file(file)
 
 
 
+
+class LibraryListWidget(QListWidget):
+    deletePressed = Signal()
+    selectAllPressed = Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self.deletePressed.emit()
+            return
+
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            self.selectAll()
+            self.selectAllPressed.emit()
+            return
+
+        super().keyPressEvent(event)
+
 class Player(QWidget):
     def __init__(self) -> None:
         super().__init__()
+        os.system('cls')
         self.engine = Audio(self)
         self.songs: Dict[str, Dict] = {}
         self._loading_ui = False
@@ -925,10 +1005,10 @@ class Player(QWidget):
         properties_layout.setContentsMargins(16, 16, 16, 16)
         properties_layout.setSpacing(14)
 
-        songs_tab = QWidget()
-        songs_layout = QVBoxLayout(songs_tab)
-        songs_layout.setContentsMargins(16, 16, 16, 16)
-        songs_layout.setSpacing(14)
+        library_tab = QWidget()
+        library_tab_layout = QVBoxLayout(library_tab)
+        library_tab_layout.setContentsMargins(16, 16, 16, 16)
+        library_tab_layout.setSpacing(14)
 
         preset_tab = QWidget()
         preset_layout = QVBoxLayout(preset_tab)
@@ -942,7 +1022,7 @@ class Player(QWidget):
 
         self.tabs.addTab(properties_tab, "Player")
         self.tabs.addTab(lyrics_tab, "Lyrics")
-        self.tabs.addTab(songs_tab, "Library")
+        self.tabs.addTab(library_tab, "Library")
         self.tabs.addTab(preset_tab, "Preset")
 
         # =====================================================
@@ -996,9 +1076,11 @@ class Player(QWidget):
         self.now_playing_artist = QLabel("Drag .ogg files into the window")
         self.now_playing_artist.setObjectName("MutedLabel")
 
-        self.song_list = QListWidget()
+        self.song_list = LibraryListWidget()
         self.song_list.setObjectName("SongList")
         self.song_list.setMinimumHeight(260)
+        self.song_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.song_list.deletePressed.connect(self._delete_selected_songs)
 
         # =====================================================
         #                    PLAYER TAB
@@ -1094,6 +1176,7 @@ class Player(QWidget):
 
         self.current_lyrics_data = []
         self.current_lyrics_index = -1
+        self.current_lyrics_timed = False
 
         lyrics_group = QGroupBox("Lyrics")
         lyrics_group_layout = QVBoxLayout(lyrics_group)
@@ -1106,15 +1189,15 @@ class Player(QWidget):
         #                    LIBRARY TAB
         # =====================================================
         library_group = QGroupBox("Songs")
-        library_layout = QVBoxLayout(library_group)
+        library_group_layout = QVBoxLayout(library_group)
 
         library_hint = QLabel("Drop .ogg files anywhere into the window")
         library_hint.setObjectName("MutedLabel")
 
-        library_layout.addWidget(library_hint)
-        library_layout.addWidget(self.song_list, 1)
+        library_group_layout.addWidget(library_hint)
+        library_group_layout.addWidget(self.song_list, 1)
 
-        songs_layout.addWidget(library_group, 1)
+        library_tab_layout.addWidget(library_group, 1)
 
         # =====================================================
         #                    PRESET TAB
@@ -1195,6 +1278,42 @@ class Player(QWidget):
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
+    def _delete_selected_songs(self):
+        selected = self.song_list.selectedIndexes()
+        if not selected:
+            return
+
+        rows = sorted({i.row() for i in selected}, reverse=True)
+
+        for row in rows:
+            if str(row) in self.songs:
+                del self.songs[str(row)]
+            self.song_list.takeItem(row)
+
+        # rebuild index map
+        new_songs = {}
+        for i in range(self.song_list.count()):
+            item = self.song_list.item(i)
+            path = None
+
+            # recover path from filename match (best-effort)
+            for data in self.songs.values():
+                if os.path.basename(data.get("path", "")) == item.text():
+                    path = data["path"]
+                    break
+
+            if path:
+                new_songs[str(i)] = {"path": path}
+
+        self.songs = new_songs
+
+        if self.song_list.count() == 0:
+            self.current_song = 0
+        else:
+            self.current_song = min(self.current_song, self.song_list.count() - 1)
+
+        self._autosave_current_preset()
+
     def _save_current_preset_silent(self) -> None:
         if getattr(self, "_loading_ui", False):
             return
@@ -1203,7 +1322,7 @@ class Player(QWidget):
             os.makedirs(os.path.dirname(PRESET_PATH), exist_ok=True)
             with open(PRESET_PATH, "w", encoding="utf-8") as f:
                 json.dump(self._current_preset(), f, indent=2)
-            logger.info("preset autosaved")
+            logger.debug("preset autosaved")
         except Exception as e:
             logger.warning("Preset autosave failed: %s", e)
 
@@ -1300,7 +1419,9 @@ class Player(QWidget):
                 self.lyrics_status.setText("No lyrics loaded")
                 return
 
-            if data.get("timed", False):
+            self.current_lyrics_timed = bool(data.get("timed", False))
+
+            if self.current_lyrics_timed:
                 self.lyrics_status.setText("Timed lyrics")
                 logger.info("🟢 Timed lyrics")
             else:
@@ -1309,7 +1430,7 @@ class Player(QWidget):
 
             current_song = self.engine.get_current_song()
             if current_song:
-                logger.info(os.path.basename(current_song))
+                logger.debug(os.path.basename(current_song))
 
             for line in self.current_lyrics_data:
                 text = line.get("text", "")
@@ -1323,52 +1444,86 @@ class Player(QWidget):
                 item.setData(Qt.UserRole, line.get("time"))
                 self.lyrics_list.addItem(item)
 
-            self._highlight_current_lyric(-1)
+            self._highlight_current_lyric(-1, force=True)
             self.engine.lyrics.update_window(self.current_lyrics_data, -1)
             self.engine.lyrics.update_floating_window(self.current_lyrics_data, -1)
 
         finally:
             self.lyrics_list.blockSignals(False)
 
-    def _highlight_current_lyric(self, index: int):
+    def _highlight_current_lyric(self, index: int, force: bool = False):
         old_index = self.current_lyrics_index
-        if old_index == index:
+
+        if old_index == index and not force:
             return
 
         self.current_lyrics_index = index
 
-        for i, active in ((old_index, False), (index, True)):
-            if 0 <= i < self.lyrics_list.count():
-                item = self.lyrics_list.item(i)
-                if item is None:
-                    continue
+        for i in range(self.lyrics_list.count()):
+            item = self.lyrics_list.item(i)
+            if item is None:
+                continue
 
-                font = item.font()
-                font.setBold(active)
-                item.setFont(font)
-                item.setForeground(Qt.GlobalColor.white if active else Qt.GlobalColor.gray)
-                item.setBackground(Qt.GlobalColor.transparent)
+            active = i == index
+
+            font = item.font()
+            font.setBold(active)
+            item.setFont(font)
+            item.setForeground(Qt.GlobalColor.white if active else Qt.GlobalColor.gray)
+            item.setBackground(Qt.GlobalColor.transparent)
 
         if 0 <= index < self.lyrics_list.count():
             item = self.lyrics_list.item(index)
             if item is not None:
                 self.lyrics_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
 
-        self.engine.lyrics.update_window(self.current_lyrics_data, index)
+        self.engine.lyrics.update_window(self.current_lyrics_data, index, True)
         self.engine.lyrics.update_floating_window(self.current_lyrics_data, index)
+
+    def _clear_lyrics_highlight(self):
+        self.current_lyrics_index = -1
+
+        for i in range(self.lyrics_list.count()):
+            item = self.lyrics_list.item(i)
+            if item is None:
+                continue
+
+            font = item.font()
+            font.setBold(False)
+            item.setFont(font)
+            item.setForeground(Qt.GlobalColor.gray)
+            item.setBackground(Qt.GlobalColor.transparent)
+
+        self.engine.lyrics.update_window(self.current_lyrics_data, -1)
+        self.engine.lyrics.update_floating_window(self.current_lyrics_data, -1)
 
     def _update_lyrics_highlight(self):
         if not self.current_lyrics_data or self.lyrics_list.count() == 0:
             return
 
-        if not any(line.get("time") is not None for line in self.current_lyrics_data):
+        full_time, current_time = self.engine.get_time()
+
+        if self.current_lyrics_timed:
+            index = self.engine.lyrics.current_lyric_index(current_time, self.current_lyrics_data)
+
+            if 0 <= index < self.lyrics_list.count() and index != self.current_lyrics_index:
+                self._highlight_current_lyric(index)
+
             return
 
-        _, current_time = self.engine.get_time()
-        index = self.engine.lyrics.current_lyric_index(current_time, self.current_lyrics_data)
+        if full_time <= 0:
+            return
 
-        if 0 <= index < self.lyrics_list.count() and index != self.current_lyrics_index:
-            self._highlight_current_lyric(index)
+        total = len(self.current_lyrics_data)
+        if total <= 0:
+            return
+
+        progress = max(0.0, min(current_time / full_time, 0.9999))
+        fake_index = int(progress * total)
+
+        self._clear_lyrics_highlight()
+        self.engine.lyrics.update_window(self.current_lyrics_data, fake_index, False)
+        self.engine.lyrics.update_floating_window(self.current_lyrics_data, -1)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -1378,6 +1533,9 @@ class Player(QWidget):
         event.ignore()
 
     def dropEvent(self, event):
+        if not isValid(self.song_list):
+            logger.warning("song_list was deleted, skipping dropEvent")
+            return
         allowed_exts = (".ogg", ".opus", ".oga", ".flac")
 
         added = False
@@ -1397,11 +1555,12 @@ class Player(QWidget):
 
             index = str(len(self.songs))
             self.songs[index] = {"path": path}
-            self.song_list.addItem(os.path.basename(path))
+            item = QListWidgetItem(os.path.basename(path))
+            self.song_list.addItem(item)
 
             last_index = int(index)
             added = True
-            logger.info(f"Added: {path}")
+            logger.debug(f"Added: {path}")
 
         if last_index is not None:
             self.current_song = last_index
@@ -1413,11 +1572,10 @@ class Player(QWidget):
                 pixmap = QPixmap(self.cover_path)
                 self.label.setPixmap(pixmap)
 
-            self.setWindowTitle(
-                f"Yet Another Music Player - {self._get_current_preset_name()} - {song_name}"
-            )
+            self.setWindowTitle(f"Yet Another Music Player - {self._get_current_preset_name()} - {song_name}")
 
         if added:
+            self.engine._update_history_limit()
             self._autosave_current_preset()
     
         if added:
@@ -1731,7 +1889,7 @@ class Player(QWidget):
         self.engine.set_muted(p.muted)
         self.engine.volume(p.volume)
 
-        logger.info("settings changed/applied")
+        logger.debug("settings changed/applied")
         self._autosave_current_preset()
 
     def closeEvent(self, event: QCloseEvent) -> None:
