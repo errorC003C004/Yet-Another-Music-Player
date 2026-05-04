@@ -18,6 +18,8 @@ Known Issues (as of 4-23):
 
 AI slop-ish code, all bug tested though, so it's good.
 
+Photos as of 4-21
+
 <img width="500" height="322" alt="Screenshot-2026-04-21-231446" src="https://github.com/user-attachments/assets/84452e7a-d79b-4701-8905-4313585d5b39" />
 
 <img width="500" height="322" alt="Screenshot-2026-04-21-231519" src="https://github.com/user-attachments/assets/88d7cc96-271a-4f55-95e7-abb57d1b8545" />
