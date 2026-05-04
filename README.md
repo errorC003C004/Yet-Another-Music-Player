@@ -3,13 +3,13 @@
 
 Took Inspo from [foobar2000](https://www.foobar2000.org/)
 
-As if 4-21 it can
+As if 5-03 it can
 
-* Save
-* Read only .ogg files
+* Free
+* Read only .ogg, .opus, .oga, .flac files
 * Show embedded images/authors/titles
-* read .lrc with timed/plain text lyrics
-* show in Windows Media stuff
+* Read .lrc with timed/plain text lyrics
+* Show in Windows Media Manager
 * Stuff that most music players have
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
