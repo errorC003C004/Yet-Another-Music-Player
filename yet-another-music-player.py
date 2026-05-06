@@ -9,9 +9,12 @@ Every time I worked on it
   4-23-26 7:53 PM
   4-26-26 7:44 PM
   5-03-26 8:31 PM
+  5-05-26 6:10 PM
 
 Known Issues:
   * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
+  * When you go to the next song, hoving over the invisible background of lyrics at the same time, it thinks your hovering over the text and starts the timer.
+  * For floating lyrics, if you drag the window when a lyric line changes, it lets go of the drag. If song/artist is shown, it starts timer then resets it last second.
 
 Fixed Issues:
   * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
@@ -20,6 +23,7 @@ Fixed Issues:
   * Lyrics Window 
   - 1) Doesnt auto scroll (same with lyrics tab)
   - 2) If lyrics is plain, it doesnt auto scroll (it makes first line always bold)
+  * Lyrics Windows only update when a line is played (if played when off, then turn on the window, it updates when the line is bolded)
 
 Added Features:
   * .lrc file support wit a window, and clickthrough window
@@ -42,7 +46,7 @@ from mutagen import File as MutagenFile
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QTextEdit, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
@@ -137,6 +141,22 @@ def _load_auto_preset(w) -> None:
         logger.warning("Auto-load failed: %s", e)
 
 
+class LibraryListWidget(QListWidget):
+    deletePressed = Signal()
+    selectAllPressed = Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self.deletePressed.emit()
+            return
+
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            self.selectAll()
+            self.selectAllPressed.emit()
+            return
+
+        super().keyPressEvent(event)
+
 @dataclass
 class Preset:
     muted: bool = False
@@ -158,6 +178,7 @@ class LyricsPopupWindow(QWidget):
         self.setWindowTitle(title)
         self.setMinimumSize(*minimum_size)
         self.setWindowFlags(
+            Qt.WindowType.Tool |
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint
         )
@@ -325,6 +346,13 @@ class LyricsPopupWindow(QWidget):
     def set_scroll_callback(self, callback):
         self._scroll_callback = callback
 
+    def reset_clickthrough_state(self):
+        self._hover_timer.stop()
+        self._drag_ready = False
+        self._dragging = False
+        self.unsetCursor()
+        self._set_idle_style()
+
 class LyricStuff(QObject):
     def __init__(self, engine) -> None:
         super().__init__()
@@ -375,6 +403,7 @@ class LyricStuff(QObject):
             return
 
         self.floating_window.set_lyrics(lyrics_data, current_index)
+        self.floating_window.reset_clickthrough_state()
 
     def get_lyrics(self):
         artist, title, cover_path = self.engine.get_data()
@@ -399,12 +428,13 @@ class LyricStuff(QObject):
         return None
 
     def convert_lyrics(self):
+        artist, title, cover_path = self.engine.get_data()
         lyric_path = self.get_lyrics()
 
         if not lyric_path:
             return {
                 "timed": False,
-                "lyrics": [{"time": None, "text": "No lyrics found."}]
+                "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
             }
 
         with open(lyric_path, "r", encoding="utf-8") as f:
@@ -458,15 +488,32 @@ class LyricStuff(QObject):
 
     def set_lyrics(self, enabled: bool):
         self.engine.preset.lyrics_window = bool(enabled)
+
         if enabled:
             self.show_window()
+
+            player = self.engine.player
+            if hasattr(player, "current_lyrics_data"):
+                self.update_window(
+                    player.current_lyrics_data,
+                    player.current_lyrics_index,
+                    player.current_lyrics_timed
+                )
         else:
             self.hide_window()
 
     def set_floating(self, enabled: bool):
         self.engine.preset.floating_lyrics = bool(enabled)
+
         if enabled:
             self.show_floating_window()
+
+            player = self.engine.player
+            if hasattr(player, "current_lyrics_data"):
+                self.update_floating_window(
+                    player.current_lyrics_data,
+                    player.current_lyrics_index
+                )
         else:
             self.hide_floating_window()
 
@@ -501,6 +548,7 @@ class LyricStuff(QObject):
             new_index = max(0, min(len(data) - 1, current_index + direction))
 
             player._highlight_current_lyric(new_index, force=True)
+
 
 
 class Audio(QObject):
@@ -957,23 +1005,6 @@ class Audio(QObject):
 
 
 
-
-class LibraryListWidget(QListWidget):
-    deletePressed = Signal()
-    selectAllPressed = Signal()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Delete:
-            self.deletePressed.emit()
-            return
-
-        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
-            self.selectAll()
-            self.selectAllPressed.emit()
-            return
-
-        super().keyPressEvent(event)
-
 class Player(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -1040,6 +1071,21 @@ class Player(QWidget):
         self.floating_lyrics_cb = QCheckBox("Floating Lyrics")
 
         self.volume_slider = QSlider(Qt.Horizontal)
+
+        def volume_jump_to_click(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                value = QStyle.sliderValueFromPosition(
+                    self.volume_slider.minimum(),
+                    self.volume_slider.maximum(),
+                    int(event.position().x()),
+                    self.volume_slider.width()
+                )
+
+                self.volume_slider.setValue(value)
+
+            QSlider.mousePressEvent(self.volume_slider, event)
+
+        self.volume_slider.mousePressEvent = volume_jump_to_click
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(int(self.engine.preset.volume))
 
@@ -1049,6 +1095,21 @@ class Player(QWidget):
         self.volume_value_label.setAlignment(Qt.AlignCenter)
 
         self.position_slider = QSlider(Qt.Horizontal)
+
+        def jump_to_click(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                value = QStyle.sliderValueFromPosition(
+                    self.position_slider.minimum(),
+                    self.position_slider.maximum(),
+                    int(event.position().x()),
+                    self.position_slider.width()
+                )
+
+                self.position_slider.setValue(value)
+                self.engine.set_time(value)
+
+            QSlider.mousePressEvent(self.position_slider, event)
+        self.position_slider.mousePressEvent = jump_to_click
         self.position_slider.setRange(0, 0)
 
         self.time_label = QLabel("0:00 / 0:00")
@@ -1523,7 +1584,8 @@ class Player(QWidget):
 
         self._clear_lyrics_highlight()
         self.engine.lyrics.update_window(self.current_lyrics_data, fake_index, False)
-        self.engine.lyrics.update_floating_window(self.current_lyrics_data, -1)
+        artist, title, cover_path = self.engine.get_data()
+        self.engine.lyrics.update_floating_window([{"time": None, "text": f"{artist} - {title}"}], 0)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
