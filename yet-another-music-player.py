@@ -10,28 +10,33 @@ Every time I worked on it
   4-26-26 7:44 PM
   5-03-26 8:31 PM
   5-05-26 6:10 PM
+  5-06-26 6:19 PM
 
 Known Issues:
-  * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
-  * When you go to the next song, hoving over the invisible background of lyrics at the same time, it thinks your hovering over the text and starts the timer.
-  * For floating lyrics, if you drag the window when a lyric line changes, it lets go of the drag. If song/artist is shown, it starts timer then resets it last second.
+    * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
+    * When you go to the next song, hoving over the invisible background of lyrics at the same time, it thinks your hovering over the text and starts the timer.
+    * For floating lyrics, if you drag the window when a lyric line changes, it lets go of the drag. If song/artist is shown, it starts timer then resets it last second.
 
 Fixed Issues:
-  * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
-  * If you go to the next song still in the lyrics tab, it crashes with no errors (only if the next song is a valid lyric)
-  * Crash with no errors when lyrics window is open and you press next song via windows media (normal next doesnt crash)
-  * Lyrics Window 
-  - 1) Doesnt auto scroll (same with lyrics tab)
-  - 2) If lyrics is plain, it doesnt auto scroll (it makes first line always bold)
-  * Lyrics Windows only update when a line is played (if played when off, then turn on the window, it updates when the line is bolded)
+    * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
+    * If you go to the next song still in the lyrics tab, it crashes with no errors (only if the next song is a valid lyric)
+    * Crash with no errors when lyrics window is open and you press next song via windows media (normal next doesnt crash)
+    * Lyrics Window 
+     - 1) Doesnt auto scroll (same with lyrics tab)
+     - 2) If lyrics is plain, it doesnt auto scroll (it makes first line always bold)
+    * Lyrics Windows only update when a line is played (if played when off, then turn on the window, it updates when the line is bolded)
 
 Added Features:
-  * .lrc file support wit a window, and clickthrough window
-  * Pressing Del on Libary Tab Deletes Selected
-  * Ctrl + A On Libary Tab Selects All
+    * .lrc file support wit a window, and clickthrough window
+    * Pressing Del on Libary Tab Deletes Selected
+    * Ctrl + A On Libary Tab Selects All
+    * Romanji Support (jp only as of 5-06-26)
 
 Future Features:
-  * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
+    * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
+    * Option to also save song current position
+    * Windows Remember Position
+    * Translation Support
 
 '''
 import sys
@@ -62,6 +67,7 @@ from datetime import timedelta
 import re
 import hashlib
 import logging
+from pykakasi import kakasi
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -166,6 +172,8 @@ class Preset:
     volume: float = 100
     lyrics_window: bool = False
     floating_lyrics: bool = False
+    romaji: bool = False
+    translated: bool = False
 
 
 
@@ -405,6 +413,55 @@ class LyricStuff(QObject):
         self.floating_window.set_lyrics(lyrics_data, current_index)
         self.floating_window.reset_clickthrough_state()
 
+    def romanize_lrc_lines(self, text: str) -> str:
+        ts_line_re = re.compile(r'^(\s*(?:\[\d{1,2}:\d{2}(?:\.\d{1,3})?\])+)(.*)$')
+
+        def is_mostly_ascii(s: str) -> bool:
+            s = re.sub(r'\s+', '', s)
+
+            if not s:
+                return True
+
+            return sum(1 for c in s if ord(c) < 128) / len(s) > 0.9
+
+        kks = kakasi()
+
+        def romanize_jp(line: str) -> str | None:
+            t = line.strip()
+
+            if not t or is_mostly_ascii(t):
+                return None
+
+            result = kks.convert(t)
+
+            romaji = " ".join(part["hepburn"] for part in result).strip()
+            romaji = re.sub(r"\s+", " ", romaji)
+
+            if not romaji or romaji.lower() == t.lower():
+                return None
+
+            return romaji
+
+        output = []
+
+        for line in text.splitlines():
+            match = ts_line_re.match(line)
+
+            if match:
+                tags, lyric = match.group(1), match.group(2)
+                romaji = romanize_jp(lyric)
+
+                if romaji:
+                    output.append(f"{tags}{romaji}")
+                else:
+                    output.append(line)
+            else:
+                romaji = romanize_jp(line)
+                output.append(romaji if romaji else line)
+
+        return "\n".join(output)
+
+
     def get_lyrics(self):
         artist, title, cover_path = self.engine.get_data()
         current_song = self.engine.get_current_song()
@@ -439,6 +496,9 @@ class LyricStuff(QObject):
 
         with open(lyric_path, "r", encoding="utf-8") as f:
             lyrics = f.read()
+
+        if self.engine.preset.romaji:
+            lyrics = self.romanize_lrc_lines(lyrics)
 
         time_pattern = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,2}))?\]")
         timed = bool(time_pattern.search(lyrics))
@@ -548,7 +608,6 @@ class LyricStuff(QObject):
             new_index = max(0, min(len(data) - 1, current_index + direction))
 
             player._highlight_current_lyric(new_index, force=True)
-
 
 
 class Audio(QObject):
@@ -1069,6 +1128,8 @@ class Player(QWidget):
         self.repeat_cb = QCheckBox("Repeat")
         self.lyrics_window_cb = QCheckBox("Lyrics")
         self.floating_lyrics_cb = QCheckBox("Floating Lyrics")
+        self.romaji_cb = QCheckBox("Romaji")
+        self.translated_cb = QCheckBox("Translation")
 
         self.volume_slider = QSlider(Qt.Horizontal)
 
@@ -1209,8 +1270,14 @@ class Player(QWidget):
         options_layout_2.addWidget(self.floating_lyrics_cb)
         options_layout_2.addStretch()
 
+        options_layout_3 = QHBoxLayout()
+        options_layout_3.addWidget(self.romaji_cb)
+        options_layout_3.addWidget(self.translated_cb)
+        options_layout_3.addStretch()
+
         options_layout.addLayout(options_layout_1)
         options_layout.addLayout(options_layout_2)
+        options_layout.addLayout(options_layout_3)
 
         info_col.addWidget(volume_group)
         info_col.addWidget(controls_group)
@@ -1322,6 +1389,8 @@ class Player(QWidget):
         self.mute_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.lyrics_window_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.floating_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.romaji_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.translated_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.shuffle_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.repeat_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.volume_slider.valueChanged.connect(self._apply_ui_to_engine)
@@ -1915,6 +1984,8 @@ class Player(QWidget):
             self.repeat_cb.setChecked(p.repeat)
             self.volume_slider.setValue(int(p.volume))
             self._update_volume_label(int(p.volume))
+            self.romaji_cb.setChecked(p.romaji)
+            self.translated_cb.setChecked(p.translated)
 
             if self.song_list.count() > 0:
                 self.song_list.setCurrentRow(self.current_song)
@@ -1945,6 +2016,8 @@ class Player(QWidget):
         p.repeat = self.repeat_cb.isChecked()
         p.current_song = self.current_song
         p.volume = self.volume_slider.value()
+        p.romaji = self.romaji_cb.isChecked()
+        p.translated = self.translated_cb.isChecked()
 
         self.engine.set_shuffle(p.shuffle)
         self.engine.set_repeat(p.repeat)
