@@ -11,11 +11,10 @@ Every time I worked on it
   5-03-26 8:31 PM
   5-05-26 6:10 PM
   5-06-26 6:19 PM
+  5-09-26 12:42 PM
 
 Known Issues:
-    * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
-    * When you go to the next song, hoving over the invisible background of lyrics at the same time, it thinks your hovering over the text and starts the timer.
-    * For floating lyrics, if you drag the window when a lyric line changes, it lets go of the drag. If song/artist is shown, it starts timer then resets it last second.
+    * None right now
 
 Fixed Issues:
     * Shuffle, Repeat, and Muted are not applied to the engine correctly (might cause future issues)
@@ -25,6 +24,17 @@ Fixed Issues:
      - 1) Doesnt auto scroll (same with lyrics tab)
      - 2) If lyrics is plain, it doesnt auto scroll (it makes first line always bold)
     * Lyrics Windows only update when a line is played (if played when off, then turn on the window, it updates when the line is bolded)
+    * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
+    * When you go to the next song, hovering over the invisible background of lyrics at the same time, it thinks your hovering over the text and starts the timer.
+    * For floating lyrics, if you drag the window when a lyric line changes, it lets go of the drag.
+    * For floating lyrics, if song/artist is shown, it starts timer then resets it last second.
+    * Lyrics Always on Top saves to the wrong setting
+    * Floating Lyrics Always on Top doesnt apply right away
+    * Drag/drop says only .ogg, even though .opus, .oga, and .flac are supported
+    * Deleting songs can break if two songs have the same file name
+    * Deleting songs can make Next/Previous/Shuffle point to deleted songs
+    * Romaji checkbox doesnt reload lyrics until the song changes
+    * Lyrics with <, >, or & can render wrong in the lyrics window
 
 Added Features:
     * .lrc file support wit a window, and clickthrough window
@@ -68,6 +78,7 @@ import re
 import hashlib
 import logging
 from pykakasi import kakasi
+import html
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -119,7 +130,7 @@ if not os.path.exists(ICON_PATH):
         with open(ICON_PATH, "wb") as f:
             f.write(get.read())
     except Exception as e:
-        logger.warning("Cant Download Blank Image: %s", e)
+        logger.warning("Cant Download Icon Image: %s", e)
 
 PROFILE_DIR = os.path.join(APPDATA_DIR, PROFILE_NAME)
 TEMP_DIR = os.path.join(PROFILE_DIR, "Temp")
@@ -171,7 +182,9 @@ class Preset:
     current_song: int = 0
     volume: float = 100
     lyrics_window: bool = False
+    lyrics_window_on_top: bool = False
     floating_lyrics: bool = False
+    floating_lyrics_on_top: bool = False
     romaji: bool = False
     translated: bool = False
 
@@ -185,13 +198,10 @@ class LyricsPopupWindow(QWidget):
 
         self.setWindowTitle(title)
         self.setMinimumSize(*minimum_size)
-        self.setWindowFlags(
-            Qt.WindowType.Tool |
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
-        )
+        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setMouseTracking(True)
+        self.setMouseTracking(True) 
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
         self._drag_ready = False
         self._dragging = False
@@ -230,8 +240,12 @@ class LyricsPopupWindow(QWidget):
 
     def set_lyrics(self, lyrics_data: list, current_index: int = -1, highlight: bool = True):
         if not self.show_all:
+            if lyrics_data and current_index < 0:
+                current_index = 0
+
             if 0 <= current_index < len(lyrics_data):
-                self.set_text(lyrics_data[current_index].get("text", ""))
+                text = lyrics_data[current_index].get("text", "")
+                self.set_text(html.escape(str(text)))
             else:
                 self.set_text("")
             return
@@ -264,6 +278,7 @@ class LyricsPopupWindow(QWidget):
 
         for i in range(start, end):
             text = lyrics_data[i].get("text", "")
+            text = html.escape(str(text))
 
             if not text.strip():
                 text = "♫"
@@ -295,7 +310,6 @@ class LyricsPopupWindow(QWidget):
 
     def _set_idle_style(self):
         self._drag_ready = False
-        self._dragging = False
         self._apply_style(0)
 
     def _set_hover_style(self):
@@ -306,13 +320,27 @@ class LyricsPopupWindow(QWidget):
         self._apply_style(210)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
 
+    def _mouse_over_label(self, global_pos) -> bool:
+        label_pos = self.label.mapFromGlobal(global_pos)
+        return self.label.rect().contains(label_pos)
+
     def enterEvent(self, event):
+        global_pos = self.cursor().pos()
+
+        if not self._mouse_over_label(global_pos):
+            super().enterEvent(event)
+            return
+
         self._set_hover_style()
         self._hover_timer.start()
         self.setCursor(Qt.CursorShape.ArrowCursor)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        if self._dragging:
+            super().leaveEvent(event)
+            return
+
         self._hover_timer.stop()
         self.unsetCursor()
         self._set_idle_style()
@@ -331,10 +359,24 @@ class LyricsPopupWindow(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
             return
+
+        if self._mouse_over_label(event.globalPosition().toPoint()):
+            if not self._hover_timer.isActive() and not self._drag_ready:
+                self._set_hover_style()
+                self._hover_timer.start()
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            if not self._dragging:
+                self._hover_timer.stop()
+                self.unsetCursor()
+                self._set_idle_style()
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        self._dragging = False
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
@@ -357,7 +399,6 @@ class LyricsPopupWindow(QWidget):
     def reset_clickthrough_state(self):
         self._hover_timer.stop()
         self._drag_ready = False
-        self._dragging = False
         self.unsetCursor()
         self._set_idle_style()
 
@@ -406,12 +447,17 @@ class LyricStuff(QObject):
 
         self.window.set_lyrics(lyrics_data, current_index, highlight)
 
-    def update_floating_window(self, lyrics_data: list, current_index: int = -1):
+    def update_floating_window(self, lyrics_data: list, current_index: int = -1, reset_hover: bool = False):
         if self.floating_window is None:
             return
 
+        if lyrics_data and current_index < 0:
+            current_index = 0
+
         self.floating_window.set_lyrics(lyrics_data, current_index)
-        self.floating_window.reset_clickthrough_state()
+
+        if reset_hover:
+            self.floating_window.reset_clickthrough_state()
 
     def romanize_lrc_lines(self, text: str) -> str:
         ts_line_re = re.compile(r'^(\s*(?:\[\d{1,2}:\d{2}(?:\.\d{1,3})?\])+)(.*)$')
@@ -460,7 +506,6 @@ class LyricStuff(QObject):
                 output.append(romaji if romaji else line)
 
         return "\n".join(output)
-
 
     def get_lyrics(self):
         artist, title, cover_path = self.engine.get_data()
@@ -562,6 +607,19 @@ class LyricStuff(QObject):
         else:
             self.hide_window()
 
+    def set_lyrics_on_top(self, enabled: bool):
+        self.engine.preset.lyrics_window_on_top = bool(enabled)
+
+        if self.window is None:
+            self.show_window()
+
+        self.window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(enabled))
+        self.window.show()
+
+        if enabled:
+            self.window.raise_()
+            self.window.activateWindow()
+
     def set_floating(self, enabled: bool):
         self.engine.preset.floating_lyrics = bool(enabled)
 
@@ -576,6 +634,19 @@ class LyricStuff(QObject):
                 )
         else:
             self.hide_floating_window()
+
+    def set_floating_on_top(self, enabled: bool):
+        self.engine.preset.floating_lyrics_on_top = bool(enabled)
+
+        if self.floating_window is None:
+            self.show_floating_window()
+
+        self.floating_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(enabled))
+        self.floating_window.show()
+
+        if enabled:
+            self.floating_window.raise_()
+            self.floating_window.activateWindow()
 
     def _handle_scroll(self, direction: int):
         if not hasattr(self.engine.player, "current_lyrics_data"):
@@ -653,14 +724,15 @@ class Audio(QObject):
 
             if state == MediaPlaybackState.PLAYING:
                 self.player.pause_btn.setText("Pause")
-            elif state == MediaPlaybackState.OPENING:
-                self.player.pause_btn.setText("Pause")
             elif state == MediaPlaybackState.PAUSED:
                 self.player.pause_btn.setText("Resume")
+            elif state == MediaPlaybackState.OPENING:
+                pass
             else:
                 self.player.pause_btn.setText("Pause")
 
             self._update_smtc_playback_status()
+
         except Exception as e:
             logger.warning("Qt playback-state apply failed: %s", e)
 
@@ -842,7 +914,9 @@ class Audio(QObject):
         self.player._reset_progress_ui()
         self.player.pause_btn.setText("Pause")
         self._can_use_forward = False
+
         self.lyrics.hide_window()
+        self.lyrics.hide_floating_window()
 
         try:
             self._smtc.playback_status = MediaPlaybackStatus.CLOSED
@@ -1127,7 +1201,9 @@ class Player(QWidget):
         self.shuffle_cb = QCheckBox("Shuffle")
         self.repeat_cb = QCheckBox("Repeat")
         self.lyrics_window_cb = QCheckBox("Lyrics")
+        self.lyrics_window_on_top_cb = QCheckBox("Always on Top")
         self.floating_lyrics_cb = QCheckBox("Floating Lyrics")
+        self.floating_lyrics_on_top_cb = QCheckBox("Always on Top")
         self.romaji_cb = QCheckBox("Romaji")
         self.translated_cb = QCheckBox("Translation")
 
@@ -1143,6 +1219,8 @@ class Player(QWidget):
                 )
 
                 self.volume_slider.setValue(value)
+                event.accept()
+                return
 
             QSlider.mousePressEvent(self.volume_slider, event)
 
@@ -1168,6 +1246,8 @@ class Player(QWidget):
 
                 self.position_slider.setValue(value)
                 self.engine.set_time(value)
+                event.accept()
+                return
 
             QSlider.mousePressEvent(self.position_slider, event)
         self.position_slider.mousePressEvent = jump_to_click
@@ -1267,7 +1347,9 @@ class Player(QWidget):
 
         options_layout_2 = QHBoxLayout()
         options_layout_2.addWidget(self.lyrics_window_cb)
+        options_layout_2.addWidget(self.lyrics_window_on_top_cb)
         options_layout_2.addWidget(self.floating_lyrics_cb)
+        options_layout_2.addWidget(self.floating_lyrics_on_top_cb)
         options_layout_2.addStretch()
 
         options_layout_3 = QHBoxLayout()
@@ -1319,7 +1401,7 @@ class Player(QWidget):
         library_group = QGroupBox("Songs")
         library_group_layout = QVBoxLayout(library_group)
 
-        library_hint = QLabel("Drop .ogg files anywhere into the window")
+        library_hint = QLabel("Drop supported files anywhere into the window")
         library_hint.setObjectName("MutedLabel")
 
         library_group_layout.addWidget(library_hint)
@@ -1370,11 +1452,15 @@ class Player(QWidget):
         self.shuffle_cb.setChecked(self.engine.preset.shuffle)
         self.repeat_cb.setChecked(self.engine.preset.repeat)
         self.lyrics_window_cb.setChecked(self.engine.preset.lyrics_window)
+        self.lyrics_window_on_top_cb.setChecked(self.engine.preset.lyrics_window_on_top)
         self.floating_lyrics_cb.setChecked(self.engine.preset.floating_lyrics)
+        self.floating_lyrics_on_top_cb.setChecked(self.engine.preset.floating_lyrics_on_top)
         self.shuffle_cb.stateChanged.connect(lambda state: self.engine.set_shuffle(state == Qt.CheckState.Checked.value))
         self.repeat_cb.stateChanged.connect(lambda state: self.engine.set_repeat(state == Qt.CheckState.Checked.value))
         self.lyrics_window_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_lyrics(state == Qt.CheckState.Checked.value))
+        self.lyrics_window_on_top_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_lyrics_on_top(state == Qt.CheckState.Checked.value))
         self.floating_lyrics_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_floating(state == Qt.CheckState.Checked.value))
+        self.floating_lyrics_on_top_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_floating_on_top(state == Qt.CheckState.Checked.value))
 
         self.volume_slider.valueChanged.connect(self.engine.volume)
         self.volume_slider.valueChanged.connect(self._update_volume_label)
@@ -1388,8 +1474,10 @@ class Player(QWidget):
 
         self.mute_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.lyrics_window_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.lyrics_window_on_top_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.floating_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
-        self.romaji_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.floating_lyrics_on_top_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.romaji_cb.stateChanged.connect(self._on_romaji_changed)
         self.translated_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.shuffle_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.repeat_cb.stateChanged.connect(self._apply_ui_to_engine)
@@ -1408,39 +1496,93 @@ class Player(QWidget):
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
+    def _on_romaji_changed(self):
+        self._apply_ui_to_engine()
+
+        if self.engine.get_current_song():
+            self._load_lyrics_for_current_song()
+            self._update_lyrics_highlight()
+
     def _delete_selected_songs(self):
         selected = self.song_list.selectedIndexes()
         if not selected:
             return
 
-        rows = sorted({i.row() for i in selected}, reverse=True)
+        rows_to_delete = sorted({i.row() for i in selected}, reverse=True)
+        playing_path_before_delete = self.engine._current_media_path
 
-        for row in rows:
-            if str(row) in self.songs:
-                del self.songs[str(row)]
+        old_paths = [
+            self.songs[str(i)]["path"]
+            for i in range(self.song_list.count())
+            if str(i) in self.songs and "path" in self.songs[str(i)]
+        ]
+
+        for row in rows_to_delete:
             self.song_list.takeItem(row)
 
-        # rebuild index map
-        new_songs = {}
-        for i in range(self.song_list.count()):
-            item = self.song_list.item(i)
-            path = None
+        remaining_paths = [
+            path for i, path in enumerate(old_paths)
+            if i not in rows_to_delete
+        ]
 
-            # recover path from filename match (best-effort)
-            for data in self.songs.values():
-                if os.path.basename(data.get("path", "")) == item.text():
-                    path = data["path"]
-                    break
+        self.songs = {
+            str(i): {"path": path}
+            for i, path in enumerate(remaining_paths)
+        }
 
-            if path:
-                new_songs[str(i)] = {"path": path}
-
-        self.songs = new_songs
+        old_current = self.current_song
 
         if self.song_list.count() == 0:
             self.current_song = 0
+        elif old_current in rows_to_delete:
+            self.current_song = min(old_current, self.song_list.count() - 1)
         else:
-            self.current_song = min(self.current_song, self.song_list.count() - 1)
+            deleted_before_current = sum(1 for row in rows_to_delete if row < old_current)
+            self.current_song = max(0, old_current - deleted_before_current)
+
+        self.engine.preset.current_song = self.current_song
+
+        valid_count = self.song_list.count()
+
+        def remap_index(i):
+            if i in rows_to_delete:
+                return None
+
+            shift = sum(1 for row in rows_to_delete if row < i)
+            new_i = i - shift
+
+            if 0 <= new_i < valid_count:
+                return new_i
+
+            return None
+
+        self.engine.play_order = [
+            new_i for i in self.engine.play_order
+            if (new_i := remap_index(i)) is not None
+        ]
+
+        if self.engine.play_order:
+            self.engine.play_order_pos = min(
+                self.engine.play_order_pos,
+                len(self.engine.play_order) - 1
+            )
+        else:
+            self.engine.play_order_pos = -1
+
+        self.engine.history = deque(
+            [new_i for i in self.engine.history if (new_i := remap_index(i)) is not None],
+            maxlen=self.engine.history.maxlen
+        )
+
+        self.engine.recent_shuffle = deque(
+            [new_i for i in self.engine.recent_shuffle if (new_i := remap_index(i)) is not None],
+            maxlen=self.engine.recent_shuffle.maxlen
+        )
+
+        valid_paths = {data["path"] for data in self.songs.values() if "path" in data}
+
+        if playing_path_before_delete and playing_path_before_delete not in valid_paths:
+            self.engine.stop()
 
         self._autosave_current_preset()
 
@@ -1535,6 +1677,7 @@ class Player(QWidget):
         self._play_song_at_index(row)
 
     def _load_lyrics_for_current_song(self):
+        self._plain_floating_title = ""
         self.current_lyrics_data = []
         self.current_lyrics_index = -1
 
@@ -1634,33 +1777,45 @@ class Player(QWidget):
         full_time, current_time = self.engine.get_time()
 
         if self.current_lyrics_timed:
-            index = self.engine.lyrics.current_lyric_index(current_time, self.current_lyrics_data)
+            index = self.engine.lyrics.current_lyric_index(
+                current_time,
+                self.current_lyrics_data
+            )
 
-            if 0 <= index < self.lyrics_list.count() and index != self.current_lyrics_index:
-                self._highlight_current_lyric(index)
+            if index != self.current_lyrics_index:
+                if index < 0:
+                    self._clear_lyrics_highlight()
+                else:
+                    self._highlight_current_lyric(index)
 
             return
 
-        if full_time <= 0:
-            return
+        artist, title, cover_path = self.engine.get_data()
+        plain_title = f"{artist} - {title}"
 
-        total = len(self.current_lyrics_data)
-        if total <= 0:
-            return
-
-        progress = max(0.0, min(current_time / full_time, 0.9999))
-        fake_index = int(progress * total)
+        if plain_title != getattr(self, "_plain_floating_title", ""):
+            self._plain_floating_title = plain_title
+            self.engine.lyrics.update_floating_window(
+                [{"time": None, "text": plain_title}],
+                0
+            )
 
         self._clear_lyrics_highlight()
-        self.engine.lyrics.update_window(self.current_lyrics_data, fake_index, False)
-        artist, title, cover_path = self.engine.get_data()
-        self.engine.lyrics.update_floating_window([{"time": None, "text": f"{artist} - {title}"}], 0)
+        self.engine.lyrics.update_window(self.current_lyrics_data, -1, False)
+
+        self.engine.lyrics.update_floating_window(
+            [{"time": None, "text": plain_title}],
+            0
+        )
 
     def dragEnterEvent(self, event):
+        allowed_exts = (".ogg", ".opus", ".oga", ".flac")
+
         if event.mimeData().hasUrls():
-            if any(url.toLocalFile().lower().endswith(".ogg") for url in event.mimeData().urls()):
+            if any(url.toLocalFile().lower().endswith(allowed_exts) for url in event.mimeData().urls()):
                 event.acceptProposedAction()
                 return
+
         event.ignore()
 
     def dropEvent(self, event):
@@ -1831,12 +1986,16 @@ class Player(QWidget):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            self._apply_preset_to_ui(data)
             self._set_current_preset_name(name)
+            self._apply_preset_to_ui(data)
 
         except Exception as e:
             QMessageBox.critical(self, "Preset load failed", str(e))
-        self.setWindowTitle(f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}")
+            return
+
+        self.setWindowTitle(
+            f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}"
+        )
 
     def _export_current_preset(self) -> None:
         try:
@@ -1976,16 +2135,37 @@ class Player(QWidget):
             self.engine.preset.current_song = self.current_song
 
             self.pause_btn.setText("Pause")
+    
+            checkboxes = [
+                self.mute_cb,
+                self.lyrics_window_cb,
+                self.lyrics_window_on_top_cb,
+                self.floating_lyrics_cb,
+                self.floating_lyrics_on_top_cb,
+                self.romaji_cb,
+                self.translated_cb,
+                self.shuffle_cb,
+                self.repeat_cb,
+                self.volume_slider,
+            ]
+
+            for cb in checkboxes:
+                cb.blockSignals(True)
 
             self.mute_cb.setChecked(p.muted)
             self.lyrics_window_cb.setChecked(p.lyrics_window)
+            self.lyrics_window_on_top_cb.setChecked(p.lyrics_window_on_top)
             self.floating_lyrics_cb.setChecked(p.floating_lyrics)
+            self.floating_lyrics_on_top_cb.setChecked(p.floating_lyrics_on_top)
             self.shuffle_cb.setChecked(p.shuffle)
             self.repeat_cb.setChecked(p.repeat)
             self.volume_slider.setValue(int(p.volume))
             self._update_volume_label(int(p.volume))
             self.romaji_cb.setChecked(p.romaji)
             self.translated_cb.setChecked(p.translated)
+
+            for cb in checkboxes:
+                cb.blockSignals(False)
 
             if self.song_list.count() > 0:
                 self.song_list.setCurrentRow(self.current_song)
@@ -2004,6 +2184,11 @@ class Player(QWidget):
 
         self._apply_ui_to_engine()
 
+        self.engine.lyrics.set_lyrics(p.lyrics_window)
+        self.engine.lyrics.set_lyrics_on_top(p.lyrics_window_on_top)
+        self.engine.lyrics.set_floating(p.floating_lyrics)
+        self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
+
     def _apply_ui_to_engine(self) -> None:
         if getattr(self, "_loading_ui", False):
             return
@@ -2011,7 +2196,9 @@ class Player(QWidget):
         p = self.engine.preset
         p.muted = self.mute_cb.isChecked()
         p.lyrics_window = self.lyrics_window_cb.isChecked()
+        p.lyrics_window_on_top = self.lyrics_window_on_top_cb.isChecked()
         p.floating_lyrics = self.floating_lyrics_cb.isChecked()
+        p.floating_lyrics_on_top = self.floating_lyrics_on_top_cb.isChecked()
         p.shuffle = self.shuffle_cb.isChecked()
         p.repeat = self.repeat_cb.isChecked()
         p.current_song = self.current_song
@@ -2023,6 +2210,12 @@ class Player(QWidget):
         self.engine.set_repeat(p.repeat)
         self.engine.set_muted(p.muted)
         self.engine.volume(p.volume)
+
+        if self.current_lyrics_data:
+            self.engine.lyrics.set_lyrics(p.lyrics_window)
+            self.engine.lyrics.set_lyrics_on_top(p.lyrics_window_on_top)
+            self.engine.lyrics.set_floating(p.floating_lyrics)
+            self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
 
         logger.debug("settings changed/applied")
         self._autosave_current_preset()
