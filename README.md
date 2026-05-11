@@ -1,7 +1,7 @@
 
 # Yet-Another-Music-Player
 
-Took Inspo from [foobar2000](https://www.foobar2000.org/)
+Took Inspo from [foobar2000](https://www.foobar2000.org/) and [Spotify](https://www.spotify.com/)
 
 As if 5-10 it can
 
