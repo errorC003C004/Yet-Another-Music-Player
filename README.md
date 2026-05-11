@@ -3,18 +3,19 @@
 
 Took Inspo from [foobar2000](https://www.foobar2000.org/)
 
-As if 5-03 it can
+As if 5-10 it can
 
 * Free
 * Read only .ogg, .opus, .oga, .flac files
 * Show embedded images/authors/titles
 * Read .lrc with timed/plain text lyrics
+* Romanize and Translate Japanese
 * Show in Windows Media Manager
 * Stuff that most music players have
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
 Known Issues (as of 4-23):
-  * _on_playback_state_changed makes the pause button go to "Resume" then immediately back to "Pause"
+  * Translation is laggy and completely freeze the program until it finishes (audio still plays)
 
 Photos as of 4-21 (outdated)
 
