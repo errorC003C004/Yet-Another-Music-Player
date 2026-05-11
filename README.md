@@ -14,10 +14,10 @@ As if 5-10 it can
 * Stuff that most music players have
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
-Known Issues (as of 4-23):
+Known Issues (as of 5-1):
   * Translation is laggy and completely freeze the program until it finishes (audio still plays)
 
-Photos as of 4-21 (outdated)
+Photos as of 5-10:
 
 <img width="1114" height="744" alt="Screenshot-2026-05-10-213540" src="https://github.com/user-attachments/assets/b563dbbc-9fa3-460b-8a31-7394e5115486" />
 <img width="1114" height="744" alt="Screenshot-2026-05-10-213546" src="https://github.com/user-attachments/assets/16ca66b0-711d-4227-b7dc-46891324c64b" />
