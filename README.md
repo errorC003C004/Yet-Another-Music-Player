@@ -19,11 +19,8 @@ Known Issues (as of 4-23):
 
 Photos as of 4-21 (outdated)
 
-<img width="500" height="322" alt="Screenshot-2026-04-21-231446" src="https://github.com/user-attachments/assets/84452e7a-d79b-4701-8905-4313585d5b39" />
-
-<img width="500" height="322" alt="Screenshot-2026-04-21-231519" src="https://github.com/user-attachments/assets/88d7cc96-271a-4f55-95e7-abb57d1b8545" />
-
-<img width="500" height="322" alt="Screenshot-2026-04-21-231538" src="https://github.com/user-attachments/assets/569ec386-6a08-4313-b5da-dfa6ec8f05a2" />
-
-<img width="500" height="322" alt="Screenshot-2026-04-21-231556" src="https://github.com/user-attachments/assets/f78fa517-c9ec-4bd6-986a-e3dab157b9cc" />
-
+<img width="1114" height="744" alt="Screenshot-2026-05-10-213540" src="https://github.com/user-attachments/assets/b563dbbc-9fa3-460b-8a31-7394e5115486" />
+<img width="1114" height="744" alt="Screenshot-2026-05-10-213546" src="https://github.com/user-attachments/assets/16ca66b0-711d-4227-b7dc-46891324c64b" />
+<img width="1114" height="744" alt="Screenshot-2026-05-10-213557" src="https://github.com/user-attachments/assets/994703d1-5af8-4768-bbe3-739ca1d25157" />
+<img width="1114" height="744" alt="Screenshot-2026-05-10-213607" src="https://github.com/user-attachments/assets/d5d3eaf7-0077-40d0-96a5-4c99cd330569" />
+<img width="766" height="494" alt="Screenshot-2026-05-10-213634" src="https://github.com/user-attachments/assets/59dd8053-66b9-42da-af89-3b3e2d344af3" />
