@@ -1,31 +1,29 @@
 '''
 Every time I worked on it
-  4-17-26 1:45 AM
-  4-19-26 4:26 PM
+  4-17-26 01:45 AM
+  4-19-26 04:26 PM
   4-17-26 11:23 PM
-  4-20-26 8:22 PM
-  4-21-26 9:33 PM
+  4-20-26 08:22 PM
+  4-21-26 09:33 PM
   4-22-26 10:47 PM
-  4-23-26 7:53 PM
-  4-26-26 7:44 PM
-  5-03-26 8:31 PM
-  5-05-26 6:10 PM
-  5-06-26 6:19 PM
+  4-23-26 07:53 PM
+  4-26-26 07:44 PM
+  5-03-26 08:31 PM
+  5-05-26 06:10 PM
+  5-06-26 06:19 PM
   5-09-26 12:42 PM
-  5-10-26 9:30 PM
+  5-10-26 09:30 PM === Added Translation Support
+  5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
 
 Known Issues:
     * Translation is laggy and completely freeze the program until it finishes (audio still plays)
+    * The volume and time slider are not draggable (in a sense), just clicking
 
-Fixed Issues (last reset, 5-10-26 9:30 PM):
+Fixed Issues (last reset, 5-11-26 9:18 PM):
     * None
 
-Added Features:
-    * .lrc file support wit a window, and clickthrough window
-    * Pressing Del on Libary Tab Deletes Selected
-    * Ctrl + A On Libary Tab Selects All
-    * Romanji Support (jp only as of 5-06-26)
-    * Translation Support (laggy as of 5-10-26)
+Added Features (last reset, 5-11-26 9:18 PM):
+    * None
 
 Future Features:
     * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
@@ -41,6 +39,7 @@ except Exception as e:
     argos_import_error = e
     ARGOS_AVAILABLE = False
 import sys
+import ctypes
 import os
 from winrt.windows.foundation import Uri
 from winrt.windows.media import MediaPlaybackType, MediaPlaybackStatus, SystemMediaTransportControlsButton
@@ -81,19 +80,33 @@ cover_path = BLANK_PATH
 os.makedirs(APPDATA_DIR, exist_ok=True)
 # Logger thingys
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 logger.propagate = False
+logger.handlers.clear()
+
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG)
-console_formatter = logging.Formatter("[%(levelname)s] %(message)s")
-console_handler.setFormatter(console_formatter)
-logger.handlers.clear()
+
 logger.addHandler(file_handler)
-logger.addHandler(console_handler)
+
+kernel32 = ctypes.windll.kernel32
+ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+
+handle = kernel32.GetStdHandle(-11)
+mode = ctypes.c_uint()
+
+if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+    kernel32.SetConsoleMode(
+        handle,
+        mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    )
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 if not os.path.exists(SETTINGS_PATH):
     with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -168,6 +181,8 @@ class LibraryListWidget(QListWidget):
 
 @dataclass
 class Preset:
+    show_console: bool = False
+    logging_level: int = 0
     muted: bool = False
     shuffle: bool = False
     repeat: bool = False
@@ -680,6 +695,8 @@ class LyricStuff(QObject):
 
             if matches:
                 text = time_pattern.sub("", line).strip()
+                if not text:
+                    text = "♫"
 
                 for match in matches:
                     minutes = int(match.group(1))
@@ -691,6 +708,15 @@ class LyricStuff(QObject):
                 if re.match(r"^\[[a-zA-Z]+\s*:\s*.*\]$", line):
                     continue
                 converted.append({"time": None, "text": line})
+
+        if timed:
+            timed_lines = [line for line in converted if line.get("time") is not None]
+
+            if timed_lines:
+                first_time = min(line["time"] for line in timed_lines)
+
+                if first_time > 1.25:
+                    converted.append({"time": 0.0, "text": "♫"})
 
         converted.sort(key=lambda x: float("inf") if x["time"] is None else x["time"])
 
@@ -1268,7 +1294,7 @@ class Audio(QObject):
 class Player(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        #os.system('cls')
+        os.system('cls')
         self.engine = Audio(self)
         self.songs: Dict[str, Dict] = {}
         self._loading_ui = False
@@ -1278,6 +1304,10 @@ class Player(QWidget):
         self._autosave_timer.timeout.connect(self._save_current_preset_silent)
         self.cover_path = BLANK_PATH
         self.current_song = self.engine.preset.current_song
+        self._console_enabled = False
+        self._old_stdout = sys.stdout
+        self._old_stderr = sys.stderr
+        self._old_stdin = sys.stdin
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
         self.setWindowIcon(QIcon(ICON_PATH))
@@ -1549,6 +1579,7 @@ class Player(QWidget):
         self.preset_name.setPlaceholderText("Preset name")
         self.save_preset_btn = QPushButton("Save")
 
+
         top.addWidget(self.preset_name, 1)
         top.addWidget(self.save_preset_btn)
 
@@ -1561,8 +1592,26 @@ class Player(QWidget):
         bottom.addWidget(self.load_preset_btn)
         bottom.addWidget(self.export_preset_btn)
 
+        preset_settings_layout_row_1 = QHBoxLayout()
+        self.show_console_cb = QCheckBox("Show Console")
+        self.logging_level_drop = QComboBox()
+        self.logging_level_drop.addItems([
+            "Debug",
+            "Info",
+            "Warning",
+            "Error"
+        ])
+        self.logging_level_drop.setCurrentIndex(self.engine.preset.logging_level)
+
+        preset_settings_layout_row_1.addWidget(self.show_console_cb)
+        preset_settings_layout_row_1.addWidget(self.logging_level_drop)
+
+        preset_settings_layout = QVBoxLayout()
+        preset_settings_layout.addLayout(preset_settings_layout_row_1)
+
         group_layout.addLayout(top)
         group_layout.addLayout(bottom)
+        group_layout.addLayout(preset_settings_layout)
         preset_layout.addStretch(1)
 
         # =====================================================
@@ -1616,12 +1665,98 @@ class Player(QWidget):
         self.save_preset_btn.clicked.connect(self._save_preset_file)
         self.load_preset_btn.clicked.connect(self._load_preset_file)
         self.export_preset_btn.clicked.connect(self._export_current_preset)
-
+        self.show_console_cb.stateChanged.connect(lambda state: self.toggle_console(state == Qt.CheckState.Checked.value))
+        self.show_console_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.logging_level_drop.currentIndexChanged.connect(self._set_logging_level)
+        self.logging_level_drop.currentIndexChanged.connect(self._apply_ui_to_engine)
 
         self.engine.songEnded.connect(self._handle_song_end)
 
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _set_logging_level(self, index: int):
+        levels = {
+            0: (logging.DEBUG, "DEBUG", "🟣"),
+            1: (logging.INFO, "INFO", "🔵"),
+            2: (logging.WARNING, "WARNING", "🟡"),
+            3: (logging.ERROR, "ERROR", "🔴"),
+        }
+
+        level, text, emoji = levels.get(
+            index,
+            (logging.INFO, "INFO", "🔵")
+        )
+
+        logger.setLevel(level)
+
+        for handler in logger.handlers:
+            if isinstance(handler, logging.FileHandler):
+                handler.setLevel(logging.DEBUG)
+            else:
+                handler.setLevel(level)
+
+        self.engine.preset.logging_level = index
+
+        logger.log(level, f"Logging Level: {text}")
+
+    def _set_console_logging(self, stream):
+        for handler in logger.handlers[:]:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                logger.removeHandler(handler)
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+
+        if stream is None:
+            return
+
+        console_handler = logging.StreamHandler(stream)
+        console_handler.setLevel(logger.level)
+        console_handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+        logger.addHandler(console_handler)
+
+    def _reset_console_logging(self):
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                handler.stream = sys.stdout
+
+    def toggle_console(self, state: bool = True):
+        if state:
+            self.create_console()
+        else:
+            self.remove_console()
+
+    def create_console(self):
+        if self._console_enabled:
+            return
+
+        ctypes.windll.kernel32.AllocConsole()
+
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
+        sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
+        sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
+
+        self._set_console_logging(sys.stdout)
+
+        self._console_enabled = True
+        logger.info("Console enabled")
+
+    def remove_console(self):
+        if not self._console_enabled:
+            return
+
+        logger.info("Console disabled")
+
+        self._set_console_logging(open(os.devnull, "w"))
+
+        sys.stdout = self._old_stdout
+        sys.stderr = self._old_stderr
+        sys.stdin = self._old_stdin
+
+        ctypes.windll.kernel32.FreeConsole()
+        self._console_enabled = False
 
     def _scroll_plain_lyrics(self, index: int):
         if self.lyrics_list.count() == 0:
@@ -1752,7 +1887,7 @@ class Player(QWidget):
             os.makedirs(os.path.dirname(PRESET_PATH), exist_ok=True)
             with open(PRESET_PATH, "w", encoding="utf-8") as f:
                 json.dump(self._current_preset(), f, indent=2)
-            logger.debug("preset autosaved")
+            logger.debug("🟣 Preset Autosaved")
         except Exception as e:
             logger.warning("Preset autosave failed: %s", e)
 
@@ -1861,7 +1996,7 @@ class Player(QWidget):
 
             current_song = self.engine.get_current_song()
             if current_song:
-                logger.debug(os.path.basename(current_song))
+                logger.debug("🟣 " + os.path.basename(current_song))
 
             for line in self.current_lyrics_data:
                 text = line.get("text", "")
@@ -2011,7 +2146,7 @@ class Player(QWidget):
 
             last_index = int(index)
             added = True
-            logger.debug(f"Added: {path}")
+            logger.debug(f"🟣 Added: {path}")
 
         if last_index is not None:
             self.current_song = last_index
@@ -2317,6 +2452,8 @@ class Player(QWidget):
             for cb in checkboxes:
                 cb.blockSignals(True)
 
+            self.show_console_cb.setChecked(p.show_console)
+            self.logging_level_drop.setCurrentIndex(p.logging_level)
             self.mute_cb.setChecked(p.muted)
             self.lyrics_window_cb.setChecked(p.lyrics_window)
             self.lyrics_window_on_top_cb.setChecked(p.lyrics_window_on_top)
@@ -2359,6 +2496,9 @@ class Player(QWidget):
             return
 
         p = self.engine.preset
+        p.show_console = self.show_console_cb.isChecked()
+        p.logging_level = self.logging_level_drop.currentIndex()
+        self.engine.preset.logging_level = self.logging_level_drop.currentIndex()
         p.muted = self.mute_cb.isChecked()
         p.lyrics_window = self.lyrics_window_cb.isChecked()
         p.lyrics_window_on_top = self.lyrics_window_on_top_cb.isChecked()
@@ -2385,7 +2525,7 @@ class Player(QWidget):
         if p.floating_lyrics:
             self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
 
-        logger.debug("settings changed/applied")
+        logger.debug("🟣 Settings changed/applied")
         self._autosave_current_preset()
 
     def closeEvent(self, event: QCloseEvent) -> None:
