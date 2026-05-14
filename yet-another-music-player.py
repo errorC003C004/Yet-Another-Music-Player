@@ -14,10 +14,11 @@ Every time I worked on it
   5-09-26 12:42 PM
   5-10-26 09:30 PM === Added Translation Support
   5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
+  5-13-26 9:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
 
 Known Issues:
     * Translation is laggy and completely freeze the program until it finishes (audio still plays)
-    * The volume and time slider are not draggable (in a sense), just clicking
+    * The volume and time slider are not draggable (in a sense), just clicking slider only
 
 Fixed Issues (last reset, 5-11-26 9:18 PM):
     * None
@@ -52,7 +53,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.flac import Picture
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -69,6 +70,10 @@ import hashlib
 import logging
 from pykakasi import kakasi
 import html
+import pyloudnorm as pyln
+import librosa
+
+player_ver = "1.0.1"
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -183,6 +188,9 @@ class LibraryListWidget(QListWidget):
 class Preset:
     show_console: bool = False
     logging_level: int = 0
+    main_window_geometry: dict | None = None
+    lyrics_window_geometry: dict | None = None
+    floating_window_geometry: dict | None = None
     muted: bool = False
     shuffle: bool = False
     repeat: bool = False
@@ -198,6 +206,7 @@ class Preset:
 
 
 class LyricsPopupWindow(QWidget):
+    geometryChanged = Signal()
     def __init__(self, title="Lyrics", minimum_size=(420, 120), show_all=False):
         super().__init__()
 
@@ -453,6 +462,21 @@ class LyricsPopupWindow(QWidget):
         self.unsetCursor()
         self._set_idle_style()
 
+    def moveEvent(self, event):
+        self.geometryChanged.emit()
+        super().moveEvent(event)
+
+    def resizeEvent(self, event):
+        self.geometryChanged.emit()
+        super().resizeEvent(event)
+
+    def closeEvent(self, event):
+        self.geometryChanged.emit()
+        if getattr(self, "_force_close", False):
+            event.accept()
+            return
+        self.hide()
+        event.ignore()
 
 class LyricStuff(QObject):
     def __init__(self, engine) -> None:
@@ -470,6 +494,13 @@ class LyricStuff(QObject):
                 show_all=True
             )
 
+            self._restore_geometry(
+                self.window,
+                self.engine.preset.lyrics_window_geometry
+            )
+
+            self.window.geometryChanged.connect(self._save_window_geometry)
+
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
@@ -482,16 +513,25 @@ class LyricStuff(QObject):
                 show_all=False
             )
 
+            self._restore_geometry(
+                self.floating_window,
+                self.engine.preset.floating_window_geometry
+            )
+
+            self.floating_window.geometryChanged.connect(self._save_window_geometry)
+
         self.floating_window.set_scroll_callback(self._handle_scroll)
         self.floating_window.show()
         self.floating_window.raise_()
 
     def hide_window(self):
         if self.window is not None:
+            self._save_window_geometry()
             self.window.hide()
 
     def hide_floating_window(self):
         if self.floating_window is not None:
+            self._save_window_geometry()
             self.floating_window.hide()
 
     def update_window(self, lyrics_data: list, current_index: int = -1, highlight: bool = True):
@@ -832,6 +872,39 @@ class LyricStuff(QObject):
 
             player._highlight_current_lyric(new_index, force=True)
 
+    def _geometry_to_dict(self, window):
+        if window is None:
+            return None
+
+        g = window.geometry()
+        return {
+            "x": g.x(),
+            "y": g.y(),
+            "w": g.width(),
+            "h": g.height()
+        }
+
+    def _restore_geometry(self, window, geometry):
+        if window is None or not isinstance(geometry, dict):
+            return
+
+        try:
+            x = int(geometry.get("x", window.x()))
+            y = int(geometry.get("y", window.y()))
+            w = int(geometry.get("w", window.width()))
+            h = int(geometry.get("h", window.height()))
+
+            window.setGeometry(QRect(x, y, w, h))
+        except Exception as e:
+            logger.warning("Window geometry restore failed: %s", e)
+
+    def _save_window_geometry(self):
+        preset = self.engine.preset
+
+        preset.lyrics_window_geometry = self._geometry_to_dict(self.window)
+        preset.floating_window_geometry = self._geometry_to_dict(self.floating_window)
+
+        self.engine.player._autosave_current_preset()
 
 
 class Audio(QObject):
@@ -858,6 +931,9 @@ class Audio(QObject):
         self.play_order = []
         self.play_order_pos = -1
         self._metadata_cache = {}
+        self._loudness_cache = {}
+        self.target_lufs = -14.0
+        self.normalize_audio = True
 
         self._session = self.audio_player.playback_session
         self._session.add_playback_state_changed(self._on_playback_state_changed)
@@ -1011,6 +1087,43 @@ class Audio(QObject):
             logger.warning("Failed to read metadata: %s", e)
             return "Unknown Artist", os.path.basename(current_song), BLANK_PATH
 
+    def db_to_linear(self, db):
+        return 10 ** (db / 20)
+
+    def get_loudness_gain(self, path, target_lufs=None):
+        if target_lufs is None:
+            target_lufs = self.target_lufs
+
+        cached = self._loudness_cache.get(path)
+        if cached is not None:
+            return cached
+
+        try:
+            data, rate = librosa.load(path, sr=None, mono=True)
+
+            if len(data.shape) > 1:
+                data = data.mean(axis=1)
+
+            meter = pyln.Meter(rate)
+            loudness = meter.integrated_loudness(data)
+
+            gain_db = target_lufs - loudness
+
+            self._loudness_cache[path] = gain_db
+
+            logger.info(
+                "Loudness: %.2f LUFS | Gain: %.2f dB | %s",
+                loudness,
+                gain_db,
+                os.path.basename(path)
+            )
+
+            return gain_db
+
+        except Exception as e:
+            logger.warning("Loudness normalization failed: %s", e)
+            return 0.0
+
     def _path_to_uri(self, path: str) -> Uri:
         full = str(Path(path).resolve())
 
@@ -1040,6 +1153,7 @@ class Audio(QObject):
             self.player._reset_progress_ui()
 
         self.audio_player.play()
+        self.volume(self.preset.volume)
 
         self.player._set_now_playing_info(artist, title)
         self.player.setWindowTitle(
@@ -1095,7 +1209,17 @@ class Audio(QObject):
 
     def volume(self, volume: float):
         self.preset.volume = volume
-        self.audio_player.volume = max(0.0, min(float(volume) / 100.0, 1.0))
+
+        final_volume = float(volume) / 100.0
+
+        if self.normalize_audio:
+            song = self.get_current_song()
+
+            if song:
+                gain_db = self.get_loudness_gain(song)
+                final_volume *= self.db_to_linear(gain_db)
+
+        self.audio_player.volume = max(0.0, min(final_volume, 1.0))
 
     def next(self):
         songs = self.player.get_song_list()
@@ -1511,7 +1635,8 @@ class Player(QWidget):
 
         options_layout_3 = QHBoxLayout()
         options_layout_3.addWidget(self.romaji_cb)
-        options_layout_3.addWidget(self.translated_cb)
+        if ARGOS_AVAILABLE:
+            options_layout_3.addWidget(self.translated_cb)
         options_layout_3.addStretch()
 
         options_layout.addLayout(options_layout_1)
@@ -1654,7 +1779,8 @@ class Player(QWidget):
         self.floating_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.floating_lyrics_on_top_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.romaji_cb.stateChanged.connect(self._on_romaji_changed)
-        self.translated_cb.stateChanged.connect(self._on_translated_changed)
+        if ARGOS_AVAILABLE:
+            self.translated_cb.stateChanged.connect(self._on_translated_changed)
         self.shuffle_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.repeat_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.volume_slider.valueChanged.connect(self._apply_ui_to_engine)
@@ -1674,6 +1800,53 @@ class Player(QWidget):
 
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _geometry_to_dict(self, window):
+        if window is None:
+            return None
+
+        g = window.geometry()
+        return {
+            "x": g.x(),
+            "y": g.y(),
+            "w": g.width(),
+            "h": g.height()
+        }
+
+    def _restore_geometry(self, geometry):
+        if not isinstance(geometry, dict):
+            return
+
+        try:
+            self.setGeometry(QRect(
+                int(geometry.get("x", self.x())),
+                int(geometry.get("y", self.y())),
+                int(geometry.get("w", self.width())),
+                int(geometry.get("h", self.height()))
+            ))
+        except Exception as e:
+            logger.warning("Main window geometry restore failed: %s", e)
+
+    def _save_all_window_positions(self):
+        self.engine.preset.main_window_geometry = self._geometry_to_dict(self)
+
+        lyrics = self.engine.lyrics
+
+        if lyrics.window is not None:
+            self.engine.preset.lyrics_window_geometry = lyrics._geometry_to_dict(lyrics.window)
+
+        if lyrics.floating_window is not None:
+            self.engine.preset.floating_window_geometry = lyrics._geometry_to_dict(lyrics.floating_window)
+
+        self._autosave_current_preset()
+
+    def moveEvent(self, event):
+        self._save_all_window_positions()
+        super().moveEvent(event)
+
+    def resizeEvent(self, event):
+        self._save_all_window_positions()
+        super().resizeEvent(event)
 
     def _set_logging_level(self, index: int):
         levels = {
@@ -1742,6 +1915,7 @@ class Player(QWidget):
 
         self._console_enabled = True
         logger.info("Console enabled")
+        logger.info(f"Version: {player_ver}")
 
     def remove_console(self):
         if not self._console_enabled:
@@ -2406,6 +2580,7 @@ class Player(QWidget):
             valid = {k: v for k, v in preset_dict.items() if k in Preset.__dataclass_fields__}
             p = Preset(**valid)
             self.engine.preset = p
+            self._restore_geometry(p.main_window_geometry)
 
             loaded_songs = data.get("songs", [])
 
@@ -2464,7 +2639,8 @@ class Player(QWidget):
             self.volume_slider.setValue(int(p.volume))
             self._update_volume_label(int(p.volume))
             self.romaji_cb.setChecked(p.romaji)
-            self.translated_cb.setChecked(p.translated)
+            if ARGOS_AVAILABLE:
+                self.translated_cb.setChecked(p.translated)
 
             for cb in checkboxes:
                 cb.blockSignals(False)
@@ -2486,10 +2662,7 @@ class Player(QWidget):
 
         self._apply_ui_to_engine()
 
-        self.engine.lyrics.set_lyrics(p.lyrics_window)
-        self.engine.lyrics.set_lyrics_on_top(p.lyrics_window_on_top)
-        self.engine.lyrics.set_floating(p.floating_lyrics)
-        self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
+        # UI signals already applied these states.
 
     def _apply_ui_to_engine(self) -> None:
         if getattr(self, "_loading_ui", False):
@@ -2530,8 +2703,8 @@ class Player(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
+            self._save_all_window_positions()
             self._save_current_preset_silent()
-
             self.engine.stop()
 
             if self.engine.lyrics.window is not None:
