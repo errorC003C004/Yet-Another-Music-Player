@@ -14,14 +14,15 @@ Every time I worked on it
   5-09-26 12:42 PM
   5-10-26 09:30 PM === Added Translation Support
   5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
-  5-13-26 9:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
+  5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
+  + Sliders and Translation Bug Fixed
 
 Known Issues:
-    * Translation is laggy and completely freeze the program until it finishes (audio still plays)
-    * The volume and time slider are not draggable (in a sense), just clicking slider only
+    * None
 
 Fixed Issues (last reset, 5-11-26 9:18 PM):
-    * None
+    * 5-13 The volume and time slider are not draggable (in a sense), just clicking slider only
+    * 5-13 Translation is laggy and completely freeze the program until it finishes (audio still plays)
 
 Added Features (last reset, 5-11-26 9:18 PM):
     * None
@@ -53,7 +54,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 from mutagen.flac import Picture
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -181,7 +182,35 @@ class LibraryListWidget(QListWidget):
 
         super().keyPressEvent(event)
 
+class JumpSlider(QSlider):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(),
+                self.maximum(),
+                int(event.position().x()),
+                self.width()
+            )
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+            event.accept()
 
+        super().mousePressEvent(event)
+
+class LyricsWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, lyric_stuff):
+        super().__init__()
+        self.lyric_stuff = lyric_stuff
+
+    def run(self):
+        try:
+            data = self.lyric_stuff.convert_lyrics()
+            self.finished.emit(data)
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 @dataclass
@@ -631,7 +660,7 @@ class LyricStuff(QObject):
 
             # CJK fallback. Could be Chinese or Japanese kanji-only.
             if re.search(r'[\u4e00-\u9fff]', s):
-                return "zh"
+                return "ja"
 
             return None
 
@@ -646,7 +675,29 @@ class LyricStuff(QObject):
                 return None
 
             try:
-                translated = argostranslate.translate.translate(raw, source, target)
+                installed_languages = argostranslate.translate.get_installed_languages()
+
+                from_lang = next(
+                    (lang for lang in installed_languages if lang.code == source),
+                    None
+                )
+                to_lang = next(
+                    (lang for lang in installed_languages if lang.code == target),
+                    None
+                )
+
+                if from_lang is None or to_lang is None:
+                    logger.warning("Translation pair unavailable: %s -> %s", source, target)
+                    return None
+
+                translation = from_lang.get_translation(to_lang)
+
+                if translation is None:
+                    logger.warning("Translation pair unavailable: %s -> %s", source, target)
+                    return None
+
+                translated = translation.translate(raw)
+
             except Exception as e:
                 logger.warning("Translation failed: %s", e)
                 return None
@@ -1488,24 +1539,7 @@ class Player(QWidget):
         self.romaji_cb = QCheckBox("Romaji")
         self.translated_cb = QCheckBox("Translation")
 
-        self.volume_slider = QSlider(Qt.Horizontal)
-
-        def volume_jump_to_click(event):
-            if event.button() == Qt.MouseButton.LeftButton:
-                value = QStyle.sliderValueFromPosition(
-                    self.volume_slider.minimum(),
-                    self.volume_slider.maximum(),
-                    int(event.position().x()),
-                    self.volume_slider.width()
-                )
-
-                self.volume_slider.setValue(value)
-                event.accept()
-                return
-
-            QSlider.mousePressEvent(self.volume_slider, event)
-
-        self.volume_slider.mousePressEvent = volume_jump_to_click
+        self.volume_slider = JumpSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(int(self.engine.preset.volume))
 
@@ -1514,24 +1548,7 @@ class Player(QWidget):
         self.volume_value_label.setMinimumWidth(52)
         self.volume_value_label.setAlignment(Qt.AlignCenter)
 
-        self.position_slider = QSlider(Qt.Horizontal)
-
-        def jump_to_click(event):
-            if event.button() == Qt.MouseButton.LeftButton:
-                value = QStyle.sliderValueFromPosition(
-                    self.position_slider.minimum(),
-                    self.position_slider.maximum(),
-                    int(event.position().x()),
-                    self.position_slider.width()
-                )
-
-                self.position_slider.setValue(value)
-                self.engine.set_time(value)
-                event.accept()
-                return
-
-            QSlider.mousePressEvent(self.position_slider, event)
-        self.position_slider.mousePressEvent = jump_to_click
+        self.position_slider = JumpSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
 
         self.time_label = QLabel("0:00 / 0:00")
@@ -2144,15 +2161,51 @@ class Player(QWidget):
         self._play_song_at_index(row)
 
     def _load_lyrics_for_current_song(self):
+        old_thread = getattr(self, "_lyrics_thread", None)
+
+        if old_thread is not None:
+            try:
+                if old_thread.isRunning():
+                    old_thread.quit()
+                    old_thread.wait(1000)
+            except RuntimeError:
+                pass
+
+        self._lyrics_thread = None
+        self._lyrics_worker = None
         self._plain_floating_title = ""
         self.current_lyrics_data = []
         self.current_lyrics_index = -1
 
         self.lyrics_list.blockSignals(True)
         self.lyrics_list.clear()
+        self.lyrics_status.setText("Loading lyrics...")
 
+        self._lyrics_thread = QThread(self)
+        self._lyrics_worker = LyricsWorker(self.engine.lyrics)
+        self._lyrics_worker.moveToThread(self._lyrics_thread)
+
+        self._lyrics_thread.started.connect(self._lyrics_worker.run)
+        self._lyrics_worker.finished.connect(self._lyrics_loaded)
+        self._lyrics_worker.failed.connect(self._lyrics_failed)
+
+        self._lyrics_worker.finished.connect(self._lyrics_thread.quit)
+        self._lyrics_worker.failed.connect(self._lyrics_thread.quit)
+        self._lyrics_thread.finished.connect(self._lyrics_thread_finished)
+
+        self._lyrics_thread.start()
+
+    def _lyrics_thread_finished(self):
+        self._lyrics_worker = None
+        self._lyrics_thread = None
+
+    def _lyrics_failed(self, error: str):
+        self.lyrics_list.blockSignals(False)
+        self.lyrics_status.setText("Lyrics failed to load")
+        logger.warning("Lyrics worker failed: %s", error)
+
+    def _lyrics_loaded(self, data):
         try:
-            data = self.engine.lyrics.convert_lyrics()
             self.current_lyrics_data = data["lyrics"] if data else []
 
             if not self.current_lyrics_data:
@@ -2168,33 +2221,32 @@ class Player(QWidget):
                 self.lyrics_status.setText("Plain lyrics")
                 logger.info("🟡 Plain lyrics" if self.engine.lyrics.get_lyrics() else "🔴 Lyrics file not found")
 
-            current_song = self.engine.get_current_song()
-            if current_song:
-                logger.debug("🟣 " + os.path.basename(current_song))
+            self.lyrics_list.clear()
 
             for line in self.current_lyrics_data:
                 text = line.get("text", "")
 
-                if not text.strip():
-                    text = "♫"
-                    line["text"] = text
-
                 item = QListWidgetItem(text)
-                font = QFont()
 
-                if LyricsPopupWindow.contains_japanese(None, text):
-                    font.setFamilies(["Noto Sans JP"])
+                item.setTextAlignment(Qt.AlignCenter)
+
+                item.setData(Qt.UserRole, line.get("time"))
+
+                font = item.font()
+                font.setPointSize(12)
+
+                if self.engine.lyrics.window and self.engine.lyrics.window.contains_japanese(text):
+                    font.setFamily("Noto Sans JP")
                 else:
-                    font.setFamilies(["Segoe UI Variable"])
+                    font.setFamily("Segoe UI Variable")
 
                 item.setFont(font)
-                item.setTextAlignment(Qt.AlignCenter)
-                item.setData(Qt.UserRole, line.get("time"))
+
                 self.lyrics_list.addItem(item)
 
-            self._highlight_current_lyric(-1, force=True)
-            self.engine.lyrics.update_window(self.current_lyrics_data, -1)
-            self.engine.lyrics.update_floating_window(self.current_lyrics_data, -1)
+            self.current_lyrics_index = -1
+            self._update_lyrics_highlight()
+
 
         finally:
             self.lyrics_list.blockSignals(False)
