@@ -27,16 +27,14 @@ README file is currently updated per version
 <details>
 <summary>Known Issues:</summary>
 
-  * Translation is laggy and completely freezes the program until it finishes (audio still plays)
-
-  * The volume and time slider are not draggable (in a sense), just clicking
+  * None
 
 
 </details>
 
 <details>
 <summary>Photos:</summary>
-
+<br>
 <img width="1114" height="744" alt="Screenshot-2026-05-10-213540" src="https://github.com/user-attachments/assets/b563dbbc-9fa3-460b-8a31-7394e5115486" />
 <img width="1114" height="744" alt="Screenshot-2026-05-10-213546" src="https://github.com/user-attachments/assets/16ca66b0-711d-4227-b7dc-46891324c64b" />
 <img width="1114" height="744" alt="Screenshot-2026-05-10-213557" src="https://github.com/user-attachments/assets/994703d1-5af8-4768-bbe3-739ca1d25157" />
