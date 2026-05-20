@@ -20,6 +20,7 @@ Every time I worked on it
   + Added Queue button (auto queing coming soon), also made the loudness thingy no longer logger.info (its logger.debug)
   5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
   + Queue Saving, Windows Remember Position, settings tab
+  + Removed Preset Tab and added to settings
 
 Known Issues:
     * None (maybe)
@@ -55,7 +56,7 @@ from winrt.windows.storage import StorageFile
 from winrt.windows.storage.streams import RandomAccessStreamReference
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QInputDialog, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
@@ -1769,11 +1770,6 @@ class Player(QWidget):
         library_tab_layout.setContentsMargins(16, 16, 16, 16)
         library_tab_layout.setSpacing(14)
 
-        preset_tab = QWidget()
-        preset_layout = QVBoxLayout(preset_tab)
-        preset_layout.setContentsMargins(16, 16, 16, 16)
-        preset_layout.setSpacing(14)
-
         lyrics_tab = QWidget()
         lyrics_layout = QVBoxLayout(lyrics_tab)
         lyrics_layout.setContentsMargins(16, 16, 16, 16)
@@ -1802,7 +1798,6 @@ class Player(QWidget):
         self.tabs.addTab(queue_tab, "Queue")
         self.tabs.addTab(library_tab, "Library")
         self.tabs.addTab(settings_tab, "Settings")
-        self.tabs.addTab(preset_tab, "Preset")
 
         # =====================================================
         #                    SHARED WIDGETS
@@ -2036,7 +2031,7 @@ class Player(QWidget):
 
 
         settings_group = QGroupBox("Settings")
-        settings_group_layout = QVBoxLayout(settings_group)
+        settings_boxed_layout = QVBoxLayout(settings_group)
 
         # =========================
         # Console Settings
@@ -2059,6 +2054,44 @@ class Player(QWidget):
         settings_console_layout_row_1.addWidget(self.logging_level_drop)
         settings_console_layout.addLayout(settings_console_layout_row_1)
         
+        # =========================
+        # PRESET SETTINGS
+        # =========================
+
+        settings_preset_group = QGroupBox("Presets")
+        settings_preset_layout = QVBoxLayout(settings_preset_group)
+        settings_preset_layout.setSpacing(10)
+
+        preset_hint = QLabel(f"Current preset: {PROFILE_NAME}")
+        preset_hint.setObjectName("MutedLabel")
+        self.preset_status_label = preset_hint
+
+        preset_buttons_row_1 = QHBoxLayout()
+        self.save_preset_btn = QPushButton("Save Current")
+        self.save_as_new_preset_btn = QPushButton("Save as New")
+
+        preset_buttons_row_1.addWidget(self.save_preset_btn)
+        preset_buttons_row_1.addWidget(self.save_as_new_preset_btn)
+
+        preset_buttons_row_2 = QHBoxLayout()
+        self.load_preset_btn = QPushButton("Load Preset")
+        self.export_preset_btn = QPushButton("Set Current as Default")
+
+        preset_buttons_row_2.addWidget(self.load_preset_btn)
+        preset_buttons_row_2.addWidget(self.export_preset_btn)
+
+        self.preset_name = QLineEdit()
+        self.preset_name.setText(PROFILE_NAME)
+        self.preset_name.hide()
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.hide()
+
+        settings_preset_layout.addWidget(preset_hint)
+        settings_preset_layout.addLayout(preset_buttons_row_1)
+        settings_preset_layout.addLayout(preset_buttons_row_2)
+        settings_preset_layout.addWidget(self.preset_name)
+        settings_preset_layout.addWidget(self.preset_combo)
 
         # =========================
         # PLAYER SETTINGS
@@ -2090,9 +2123,6 @@ class Player(QWidget):
         settings_player_layout.addLayout(settings_player_layout_2)
         settings_player_layout.addLayout(settings_player_layout_3)
 
-        settings_group_layout.addWidget(settings_console_group)
-        settings_group_layout.addWidget(settings_player_group)
-
         # =========================
         # LYRICS SETTINGS
         # =========================
@@ -2123,46 +2153,16 @@ class Player(QWidget):
         # colors, fonts
 
 
-        settings_group_layout.addWidget(settings_console_group)
-        settings_group_layout.addWidget(settings_player_group)
-        settings_group_layout.addWidget(settings_lyrics_group)
-        settings_group_layout.addWidget(settings_queue_group)
-        settings_group_layout.addWidget(settings_library_group)
-        settings_group_layout.addWidget(settings_theme_group)
+        settings_boxed_layout.addWidget(settings_console_group)
+        settings_boxed_layout.addWidget(settings_preset_group)
+        settings_boxed_layout.addWidget(settings_player_group)
+        settings_boxed_layout.addWidget(settings_lyrics_group)
+        settings_boxed_layout.addWidget(settings_queue_group)
+        settings_boxed_layout.addWidget(settings_library_group)
+        settings_boxed_layout.addWidget(settings_theme_group)
 
         settings_layout.addWidget(settings_group)
         settings_layout.addStretch()
-        # =====================================================
-        #                    PRESET TAB
-        # =====================================================
-        preset_group = QGroupBox("Presets")
-        group_layout = QVBoxLayout(preset_group)
-        preset_layout.addWidget(preset_group)
-
-        top = QHBoxLayout()
-        self.preset_name = QLineEdit()
-        self.preset_name.setText(PROFILE_NAME)
-        self.preset_name.setPlaceholderText("Preset name")
-        self.save_preset_btn = QPushButton("Save")
-
-
-        top.addWidget(self.preset_name, 1)
-        top.addWidget(self.save_preset_btn)
-
-        bottom = QHBoxLayout()
-        self.preset_combo = QComboBox()
-        self.load_preset_btn = QPushButton("Load")
-        self.export_preset_btn = QPushButton("Set Default")
-
-        bottom.addWidget(self.preset_combo, 1)
-        bottom.addWidget(self.load_preset_btn)
-        bottom.addWidget(self.export_preset_btn)
-
-
-        group_layout.addLayout(top)
-        group_layout.addLayout(bottom)
-        preset_layout.addStretch(1)
-
 
         # =====================================================
         #              SETTINGS CHECKBOX SYNC
@@ -2259,8 +2259,9 @@ class Player(QWidget):
         self.song_list.itemDoubleClicked.connect(self._library_item_double_clicked)
         self.queue_list.itemDoubleClicked.connect(self._queue_item_double_clicked)
 
-        self.save_preset_btn.clicked.connect(self._save_preset_file)
-        self.load_preset_btn.clicked.connect(self._load_preset_file)
+        self.save_preset_btn.clicked.connect(self._save_current_preset_button)
+        self.save_as_new_preset_btn.clicked.connect(self._save_as_new_preset_dialog)
+        self.load_preset_btn.clicked.connect(self._load_preset_dialog)
         self.export_preset_btn.clicked.connect(self._export_current_preset)
         self.show_console_cb.stateChanged.connect(lambda state: self.toggle_console(state == Qt.CheckState.Checked.value))
         self.show_console_cb.stateChanged.connect(self._apply_ui_to_engine)
@@ -3092,6 +3093,67 @@ class Player(QWidget):
         self.position_slider.setValue(0)
         self.position_slider.blockSignals(False)
         self.time_label.setText("0:00 / 0:00")
+
+    def _update_preset_status_label(self):
+        if hasattr(self, "preset_status_label"):
+            self.preset_status_label.setText(
+                f"Current preset: {self._get_current_preset_name()}"
+            )
+
+    def _save_current_preset_button(self):
+        self.preset_name.setText(self._get_current_preset_name())
+        self._save_preset_file()
+        self._update_preset_status_label()
+
+    def _save_as_new_preset_dialog(self):
+        name, ok = QInputDialog.getText(
+            self,
+            "Save as New Preset",
+            "Preset name:"
+        )
+
+        if not ok:
+            return
+
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "Invalid name", "Preset name cannot be empty.")
+            return
+
+        self.preset_name.setText(name)
+        self._save_preset_file()
+        self._update_preset_status_label()
+
+    def _load_preset_dialog(self):
+        self._refresh_preset_dropdown()
+
+        presets = [
+            self.preset_combo.itemText(i)
+            for i in range(self.preset_combo.count())
+        ]
+
+        if not presets:
+            QMessageBox.warning(self, "No presets", "No presets were found.")
+            return
+
+        current = self._get_current_preset_name()
+        current_index = presets.index(current) if current in presets else 0
+
+        name, ok = QInputDialog.getItem(
+            self,
+            "Load Preset",
+            "Choose preset:",
+            presets,
+            current_index,
+            False
+        )
+
+        if not ok or not name:
+            return
+
+        self.preset_combo.setCurrentText(name)
+        self._load_preset_file()
+        self._update_preset_status_label()
 
     def _preset_folder(self, name: str) -> str:
         return os.path.join(APPDATA_DIR, name)
