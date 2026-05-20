@@ -16,32 +16,36 @@ Every time I worked on it
   5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
   5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
   + Sliders and Translation Bug Fixed
+  5-17-26 12:11 AM === small bug fixes,
+  + Added Queue button (auto queing coming soon), also made the loudness thingy no longer logger.info (its logger.debug)
+  5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
+  + Queue Saving, Windows Remember Position, settings tab
 
 Known Issues:
-    * None
+    * None (maybe)
 
 Fixed Issues (last reset, 5-11-26 9:18 PM):
     * 5-13 The volume and time slider are not draggable (in a sense), just clicking slider only
     * 5-13 Translation is laggy and completely freeze the program until it finishes (audio still plays)
 
 Added Features (last reset, 5-11-26 9:18 PM):
-    * None
+    * Queue
+    * Queue Saving
+    * Windows Remember Position
 
 Future Features:
     * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
     * Option to also save song current position/time
-    * Windows Remember Position
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
+    * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
 
 '''
-try:
-    import argostranslate.translate
-    ARGOS_AVAILABLE = True
-except Exception as e:
-    argos_import_error = e
-    ARGOS_AVAILABLE = False
+ARGOS_AVAILABLE = None
+argos_import_error = None
+_argos_translate = None
 import sys
 import ctypes
+from ctypes import wintypes
 import os
 from winrt.windows.foundation import Uri
 from winrt.windows.media import MediaPlaybackType, MediaPlaybackStatus, SystemMediaTransportControlsButton
@@ -50,11 +54,9 @@ from winrt.windows.media.playback import MediaPlayer, MediaPlaybackState
 from winrt.windows.storage import StorageFile
 from winrt.windows.storage.streams import RandomAccessStreamReference
 from mutagen import File as MutagenFile
-from mutagen.oggvorbis import OggVorbis
-from mutagen.oggopus import OggOpus
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QTabWidget, QWidget, QPushButton, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -63,18 +65,16 @@ from typing import Dict, List
 from shiboken6 import isValid
 import json
 import base64
-import requests
+from urllib.request import urlopen
 import random
 from datetime import timedelta
 import re
 import hashlib
 import logging
-from pykakasi import kakasi
 import html
-import pyloudnorm as pyln
-import librosa
-
-player_ver = "1.0.1"
+LIB_AND_PYLN_IMPORTED = False
+KAKASI_IMPORTED = False
+player_ver = "1.1.0"
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -89,18 +89,29 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
 logger.handlers.clear()
-
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
-
 logger.addHandler(file_handler)
-
 kernel32 = ctypes.windll.kernel32
-ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+CTRL_CLOSE_EVENT = 2
+_console_owner = None
+ConsoleCtrlHandlerType = ctypes.WINFUNCTYPE(
+    ctypes.c_bool,
+    ctypes.c_uint
+)
+@ConsoleCtrlHandlerType
+def _console_ctrl_handler(ctrl_type):
+    global _console_owner
 
+    if ctrl_type == CTRL_CLOSE_EVENT:
+        if _console_owner is not None:
+            console_close_bridge.closed.emit()
+        return True
+
+    return False
+ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 handle = kernel32.GetStdHandle(-11)
 mode = ctypes.c_uint()
 
@@ -128,18 +139,24 @@ else:
 
 if not os.path.exists(BLANK_PATH):
     try: 
-        get = requests.get("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/no_image.png?raw=true", stream=True, timeout=10).raw
-        with open(BLANK_PATH, "wb") as f:
-            f.write(get.read())
+        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/no_image.png?raw=true", timeout=10) as r:
+            with open(BLANK_PATH, "wb") as f:
+                f.write(r.read())
     except Exception as e:
         logger.warning("Cant Download Blank Image: %s", e)
 if not os.path.exists(ICON_PATH):
     try:
-        get = requests.get("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/icon.png?raw=true", stream=True, timeout=10).raw
-        with open(ICON_PATH, "wb") as f:
-            f.write(get.read())
+        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/icon.png?raw=true", timeout=10) as r:
+            with open(ICON_PATH, "wb") as f:
+                f.write(r.read())
     except Exception as e:
         logger.warning("Cant Download Icon Image: %s", e)
+
+if getattr(sys, 'frozen', False):
+    runningpy = False
+else:
+    runningpy = True 
+
 
 PROFILE_DIR = os.path.join(APPDATA_DIR, PROFILE_NAME)
 TEMP_DIR = os.path.join(PROFILE_DIR, "Temp")
@@ -165,6 +182,30 @@ def _load_auto_preset(w) -> None:
         w._apply_preset_to_ui(data)
     except Exception as e:
         logger.warning("Auto-load failed: %s", e)
+
+def get_argos_translate():
+    global ARGOS_AVAILABLE, argos_import_error, _argos_translate
+
+    if ARGOS_AVAILABLE is True and _argos_translate is not None:
+        return _argos_translate
+
+    if ARGOS_AVAILABLE is False:
+        return None
+
+    try:
+        import argostranslate.translate as translate
+        _argos_translate = translate
+        ARGOS_AVAILABLE = True
+        return _argos_translate
+    except Exception as e:
+        argos_import_error = e
+        ARGOS_AVAILABLE = False
+        logger.warning("Argos unavailable: %s", e)
+        return None
+
+class ConsoleCloseBridge(QObject):
+    closed = Signal()
+console_close_bridge = ConsoleCloseBridge()
 
 class LibraryListWidget(QListWidget):
     deletePressed = Signal()
@@ -197,6 +238,31 @@ class JumpSlider(QSlider):
 
         super().mousePressEvent(event)
 
+class LoudnessWorker(QObject):
+    finished = Signal(str, float)
+    failed = Signal(str, str)
+
+    def __init__(self, path: str, target_lufs: float):
+        super().__init__()
+        self.path = path
+        self.target_lufs = target_lufs
+
+    def run(self):
+        try:
+            from librosa import load as lload
+            import pyloudnorm as pyln
+
+            data, rate = lload(self.path, sr=None, mono=True)
+
+            meter = pyln.Meter(rate)
+            loudness = meter.integrated_loudness(data)
+
+            gain_db = self.target_lufs - loudness
+            self.finished.emit(self.path, gain_db)
+
+        except Exception as e:
+            self.failed.emit(self.path, str(e))
+
 class LyricsWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
@@ -212,6 +278,28 @@ class LyricsWorker(QObject):
         except Exception as e:
             self.failed.emit(str(e))
 
+class LyricsResultBridge(QObject):
+    loaded = Signal(dict, int, str)
+    failed = Signal(str, int, str)
+
+LF_FACESIZE = 32
+STD_OUTPUT_HANDLE = -11
+
+class COORD(ctypes.Structure):
+    _fields_ = [
+        ("X", ctypes.c_short),
+        ("Y", ctypes.c_short),
+    ]
+
+class CONSOLE_FONT_INFOEX(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("nFont", ctypes.c_ulong),
+        ("dwFontSize", COORD),
+        ("FontFamily", ctypes.c_uint),
+        ("FontWeight", ctypes.c_uint),
+        ("FaceName", wintypes.WCHAR * LF_FACESIZE),
+    ]
 
 @dataclass
 class Preset:
@@ -231,11 +319,13 @@ class Preset:
     floating_lyrics_on_top: bool = False
     romaji: bool = False
     translated: bool = False
+    queue: list[int] | None = None
 
 
 
 class LyricsPopupWindow(QWidget):
     geometryChanged = Signal()
+    closedByUser = Signal()
     def __init__(self, title="Lyrics", minimum_size=(420, 120), show_all=False):
         super().__init__()
 
@@ -501,10 +591,13 @@ class LyricsPopupWindow(QWidget):
 
     def closeEvent(self, event):
         self.geometryChanged.emit()
+
         if getattr(self, "_force_close", False):
             event.accept()
             return
+
         self.hide()
+        self.closedByUser.emit()
         event.ignore()
 
 class LyricStuff(QObject):
@@ -514,6 +607,7 @@ class LyricStuff(QObject):
         self.window = None
         self.floating_window = None
         self.translation_cache = {}
+        self.KAKASI_IMPORT = KAKASI_IMPORTED
 
     def show_window(self):
         if self.window is None:
@@ -529,6 +623,7 @@ class LyricStuff(QObject):
             )
 
             self.window.geometryChanged.connect(self._save_window_geometry)
+            self.window.closedByUser.connect(self._lyrics_window_closed_by_user)
 
         self.window.show()
         self.window.raise_()
@@ -548,6 +643,7 @@ class LyricStuff(QObject):
             )
 
             self.floating_window.geometryChanged.connect(self._save_window_geometry)
+            self.floating_window.closedByUser.connect(self._floating_window_closed_by_user)
 
         self.floating_window.set_scroll_callback(self._handle_scroll)
         self.floating_window.show()
@@ -562,6 +658,24 @@ class LyricStuff(QObject):
         if self.floating_window is not None:
             self._save_window_geometry()
             self.floating_window.hide()
+
+    def _lyrics_window_closed_by_user(self):
+        self.engine.preset.lyrics_window = False
+
+        self.engine.player._set_checkbox_silent(self.engine.player.lyrics_window_cb,
+            False
+        )
+
+        self.engine.player._autosave_current_preset()
+
+    def _floating_window_closed_by_user(self):
+        self.engine.preset.floating_lyrics = False
+
+        self.engine.player._set_checkbox_silent(self.engine.player.floating_lyrics_cb,
+            False
+        )
+
+        self.engine.player._autosave_current_preset()
 
     def update_window(self, lyrics_data: list, current_index: int = -1, highlight: bool = True):
         if self.window is None:
@@ -582,6 +696,7 @@ class LyricStuff(QObject):
             self.floating_window.reset_clickthrough_state()
 
     def romanize_lrc_lines(self, text: str) -> str:
+        from pykakasi import kakasi
         ts_line_re = re.compile(r'^(\s*(?:\[\d{1,2}:\d{2}(?:\.\d{1,3})?\])+)(.*)$')
 
         def is_mostly_ascii(s: str) -> bool:
@@ -630,7 +745,9 @@ class LyricStuff(QObject):
         return "\n".join(output)
 
     def translate_lrc_lines(self, text: str, target: str = "en") -> str:
-        if not ARGOS_AVAILABLE:
+        argos_translate = get_argos_translate()
+
+        if argos_translate is None:
             logger.warning("Argos unavailable: %s", argos_import_error)
             return text
         cache_key = (target, text)
@@ -650,15 +767,15 @@ class LyricStuff(QObject):
             return sum(1 for c in s if ord(c) < 128) / len(s) > 0.9
 
         def detect_lang_guess(s: str) -> str | None:
-            # Japanese kana = definitely Japanese
+            # Japanese
             if re.search(r'[\u3040-\u30ff]', s):
                 return "ja"
 
-            # Korean Hangul
+            # Korean
             if re.search(r'[\uac00-\ud7af]', s):
                 return "ko"
 
-            # CJK fallback. Could be Chinese or Japanese kanji-only.
+            # Chinese or Japanese kanji-only.
             if re.search(r'[\u4e00-\u9fff]', s):
                 return "ja"
 
@@ -675,7 +792,7 @@ class LyricStuff(QObject):
                 return None
 
             try:
-                installed_languages = argostranslate.translate.get_installed_languages()
+                installed_languages = argos_translate.get_installed_languages()
 
                 from_lang = next(
                     (lang for lang in installed_languages if lang.code == source),
@@ -976,15 +1093,20 @@ class Audio(QObject):
         self.history = deque(maxlen=50)
         self.forward_history = deque(maxlen=50)
         self.recent_shuffle = deque(maxlen=10)
+        self.play_order = deque(maxlen=50)
 
         self._current_media_path = None
         self._can_use_forward = False
-        self.play_order = []
+        self.queue = []
         self.play_order_pos = -1
+        self._nav_locked = False
+        self._pending_next_clicks = 0
+        self._pending_back_clicks = 0
         self._metadata_cache = {}
         self._loudness_cache = {}
         self.target_lufs = -14.0
         self.normalize_audio = True
+        self.queue_auto_enabled = True
 
         self._session = self.audio_player.playback_session
         self._session.add_playback_state_changed(self._on_playback_state_changed)
@@ -997,6 +1119,85 @@ class Audio(QObject):
         self.playbackStateChanged.connect(self._apply_playback_state_on_qt_thread)
         self.mediaOpenedQt.connect(self._apply_media_opened_on_qt_thread)
         self.smtcButtonPressedQt.connect(self._handle_smtc_button_on_qt_thread)
+
+    def _finish_nav(self):
+        self._nav_locked = False
+
+        if self._pending_back_clicks > 0:
+            self._pending_back_clicks -= 1
+            self.back()
+            return
+
+        if self._pending_next_clicks > 0:
+            self._pending_next_clicks -= 1
+            self.next()
+            return
+
+    def _unlock_nav(self):
+        self._nav_locked = False
+
+    def get_data_for_path(self, path: str):
+        old_current = self.player.current_song
+
+        try:
+            for key, data in self.player.songs.items():
+                if data.get("path") == path:
+                    self.player.current_song = int(key)
+                    return self.get_data()
+
+            return "Unknown Artist", os.path.basename(path), BLANK_PATH
+
+        finally:
+            self.player.current_song = old_current
+
+    def start_loudness_analysis(self, path: str):
+        if not path:
+            return
+
+        if path in self._loudness_cache:
+            return
+
+        if not hasattr(self, "_loudness_threads"):
+            self._loudness_threads = {}
+
+        if path in self._loudness_threads:
+            return
+
+        thread = QThread()
+        worker = LoudnessWorker(path, self.target_lufs)
+        worker.moveToThread(thread)
+
+        self._loudness_threads[path] = (thread, worker)
+
+        thread.started.connect(worker.run)
+
+        worker.finished.connect(self._loudness_finished)
+        worker.failed.connect(self._loudness_failed)
+
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda p=path: self._clear_loudness_worker(p))
+
+        thread.start()
+
+    def _loudness_finished(self, path: str, gain_db: float):
+        self._loudness_cache[path] = gain_db
+
+        logger.debug("Loudness gain ready: %.2f dB | %s", gain_db, os.path.basename(path))
+
+        if path == self.get_current_song():
+            self.volume(self.preset.volume)
+
+    def _loudness_failed(self, path: str, error: str):
+        logger.warning("Loudness normalization failed for %s: %s", path, error)
+        self._loudness_cache[path] = 0.0
+
+    def _clear_loudness_worker(self, path: str):
+        if hasattr(self, "_loudness_threads"):
+            self._loudness_threads.pop(path, None)
 
     def _apply_playback_state_on_qt_thread(self, state_value: int):
         try:
@@ -1150,7 +1351,11 @@ class Audio(QObject):
             return cached
 
         try:
-            data, rate = librosa.load(path, sr=None, mono=True)
+            if LIB_AND_PYLN_IMPORTED == False:
+                from librosa import load as lload
+                import pyloudnorm as pyln
+                LIB_AND_PYLN_IMPORTED = True
+            data, rate = lload(path, sr=None, mono=True)
 
             if len(data.shape) > 1:
                 data = data.mean(axis=1)
@@ -1188,6 +1393,9 @@ class Audio(QObject):
             QMessageBox.warning(self.player, "No songs", "No songs are loaded.")
             return
 
+        if self.queue_auto_enabled and hasattr(self.player, "_fill_queue"):
+            self.player._fill_queue()
+
         if not self.play_order:
             self.play_order = [self.player.current_song]
             self.play_order_pos = 0
@@ -1204,6 +1412,7 @@ class Audio(QObject):
             self.player._reset_progress_ui()
 
         self.audio_player.play()
+        self.start_loudness_analysis(song)
         self.volume(self.preset.volume)
 
         self.player._set_now_playing_info(artist, title)
@@ -1267,21 +1476,47 @@ class Audio(QObject):
             song = self.get_current_song()
 
             if song:
-                gain_db = self.get_loudness_gain(song)
+                gain_db = self._loudness_cache.get(song, 0.0)
                 final_volume *= self.db_to_linear(gain_db)
 
         self.audio_player.volume = max(0.0, min(final_volume, 1.0))
 
     def next(self):
+        if self._nav_locked:
+            self._pending_next_clicks = min(self._pending_next_clicks + 1, 5)
+            return
+
+        self._nav_locked = True
+        QTimer.singleShot(300, self._finish_nav)
+
         songs = self.player.get_song_list()
         if not songs:
             return
 
         old_index = self.player.current_song
 
-        if self.play_order_pos < len(self.play_order) - 1:
+        if self.queue_auto_enabled and self.queue:
+            new_index = self.queue.pop(0)
+
+            if hasattr(self.player, "_queue_changed"):
+                self.player._queue_changed()
+
+            if self.play_order_pos < len(self.play_order) - 1:
+                self.play_order = self.play_order[:self.play_order_pos + 1]
+
+            self.play_order.append(new_index)
+            self.play_order_pos = len(self.play_order) - 1
+
+            if hasattr(self.player, "_refresh_queue_list"):
+                self.player._refresh_queue_list()
+            
+            if hasattr(self.player, "_fill_queue"):
+                self.player._fill_queue()
+
+        elif self.play_order_pos < len(self.play_order) - 1:
             self.play_order_pos += 1
             new_index = self.play_order[self.play_order_pos]
+
         else:
             if self.preset.shuffle:
                 new_index = self._pick_shuffle_song(old_index, songs)
@@ -1299,22 +1534,46 @@ class Audio(QObject):
         self.player._autosave_current_preset()
 
     def back(self):
+        if self._nav_locked:
+            self._pending_back_clicks = min(self._pending_back_clicks + 1, 5)
+            return
+
+        self._nav_locked = True
+        QTimer.singleShot(300, self._finish_nav)
+
         songs = self.player.get_song_list()
         if not songs:
             return
 
-        current_index = self.player.current_song
+        leaving_index = self.player.current_song
 
         if self.play_order_pos > 0:
             self.play_order_pos -= 1
             previous_index = self.play_order[self.play_order_pos]
-            self.history.append(current_index)
             self.player.current_song = previous_index
+
         elif self.history:
             previous_index = self.history.pop()
             self.player.current_song = previous_index
+
         else:
-            self.player.current_song = (current_index - 1) % len(songs)
+            self._finish_nav()
+            return
+
+        if leaving_index not in self.queue:
+            self.queue.insert(0, leaving_index)
+
+        if len(self.queue) > 15:
+            self.queue = self.queue[:15]
+
+        if hasattr(self.player, "_fill_queue"):
+            self.player._fill_queue()
+
+        if hasattr(self.player, "_queue_changed"):
+            self.player._queue_changed()
+
+        if hasattr(self.player, "_refresh_queue_list"):
+            self.player._refresh_queue_list()
 
         self.preset.current_song = self.player.current_song
         self.play(force_reload=True)
@@ -1483,6 +1742,10 @@ class Player(QWidget):
         self._old_stdout = sys.stdout
         self._old_stderr = sys.stderr
         self._old_stdin = sys.stdin
+        console_close_bridge.closed.connect(self._console_closed_by_user)
+        self._lyrics_bridge = LyricsResultBridge()
+        self._lyrics_bridge.loaded.connect(self._lyrics_loaded)
+        self._lyrics_bridge.failed.connect(self._lyrics_failed)
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
         self.setWindowIcon(QIcon(ICON_PATH))
@@ -1516,9 +1779,29 @@ class Player(QWidget):
         lyrics_layout.setContentsMargins(16, 16, 16, 16)
         lyrics_layout.setSpacing(14)
 
+        settings_tab = QWidget()
+        settings_root_layout = QVBoxLayout(settings_tab)
+        settings_root_layout.setContentsMargins(0, 0, 0, 0)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        settings_container = QWidget()
+        settings_layout = QVBoxLayout(settings_container)
+        settings_layout.setContentsMargins(16, 16, 16, 16)
+        settings_layout.setSpacing(14)
+        settings_scroll.setWidget(settings_container)
+        settings_root_layout.addWidget(settings_scroll)
+
+        queue_tab = QWidget()
+        queue_layout = QVBoxLayout(queue_tab)
+        queue_layout.setContentsMargins(16, 16, 16, 16)
+        queue_layout.setSpacing(14)
+
         self.tabs.addTab(properties_tab, "Player")
         self.tabs.addTab(lyrics_tab, "Lyrics")
+        self.tabs.addTab(queue_tab, "Queue")
         self.tabs.addTab(library_tab, "Library")
+        self.tabs.addTab(settings_tab, "Settings")
         self.tabs.addTab(preset_tab, "Preset")
 
         # =====================================================
@@ -1538,6 +1821,17 @@ class Player(QWidget):
         self.floating_lyrics_on_top_cb = QCheckBox("Always on Top")
         self.romaji_cb = QCheckBox("Romaji")
         self.translated_cb = QCheckBox("Translation")
+
+        # Settings tab duplicate checkboxes
+        self.settings_mute_cb = QCheckBox("Mute")
+        self.settings_shuffle_cb = QCheckBox("Shuffle")
+        self.settings_repeat_cb = QCheckBox("Repeat")
+        self.settings_lyrics_window_cb = QCheckBox("Lyrics")
+        self.settings_lyrics_window_on_top_cb = QCheckBox("Always on Top")
+        self.settings_floating_lyrics_cb = QCheckBox("Floating Lyrics")
+        self.settings_floating_lyrics_on_top_cb = QCheckBox("Always on Top")
+        self.settings_romaji_cb = QCheckBox("Romaji")
+        self.settings_translated_cb = QCheckBox("Translation")
 
         self.volume_slider = JumpSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
@@ -1652,8 +1946,7 @@ class Player(QWidget):
 
         options_layout_3 = QHBoxLayout()
         options_layout_3.addWidget(self.romaji_cb)
-        if ARGOS_AVAILABLE:
-            options_layout_3.addWidget(self.translated_cb)
+        options_layout_3.addWidget(self.translated_cb)
         options_layout_3.addStretch()
 
         options_layout.addLayout(options_layout_1)
@@ -1695,6 +1988,35 @@ class Player(QWidget):
         lyrics_layout.addWidget(lyrics_group, 1)
 
         # =====================================================
+        #                    QUEUE TAB
+        # =====================================================
+        queue_group = QGroupBox("Queue")
+        queue_group_layout = QVBoxLayout(queue_group)
+
+        self.queue_list = LibraryListWidget()
+        self.queue_list.setObjectName("QueueList")
+        self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+
+        queue_buttons = QHBoxLayout()
+        self.add_to_queue_btn = QPushButton("Add 15 Random")
+        self.remove_from_queue_btn = QPushButton("Remove Selected")
+        self.clear_queue_btn = QPushButton("Clear Queue")
+
+        queue_buttons.addWidget(self.add_to_queue_btn)
+        queue_buttons.addWidget(self.remove_from_queue_btn)
+        queue_buttons.addWidget(self.clear_queue_btn)
+        queue_buttons.addStretch()
+
+        queue_hint = QLabel("Queue plays before shuffle/normal next.")
+        queue_hint.setObjectName("MutedLabel")
+
+        queue_group_layout.addWidget(queue_hint)
+        queue_group_layout.addWidget(self.queue_list, 1)
+        queue_group_layout.addLayout(queue_buttons)
+
+        queue_layout.addWidget(queue_group, 1)
+
+        # =====================================================
         #                    LIBRARY TAB
         # =====================================================
         library_group = QGroupBox("Songs")
@@ -1708,6 +2030,108 @@ class Player(QWidget):
 
         library_tab_layout.addWidget(library_group, 1)
 
+        # =====================================================
+        #                      Settings
+        # =====================================================
+
+
+        settings_group = QGroupBox("Settings")
+        settings_group_layout = QVBoxLayout(settings_group)
+
+        # =========================
+        # Console Settings
+        # =========================
+
+        settings_console_group = QGroupBox("Console Settings")
+        settings_console_layout = QVBoxLayout(settings_console_group)
+        settings_console_layout_row_1 = QHBoxLayout()
+        self.show_console_cb = QCheckBox("Show Console")
+        self.logging_level_drop = QComboBox()
+        self.logging_level_drop.addItems([
+            "Debug",
+            "Info",
+            "Warning",
+            "Error"
+        ])
+        self.logging_level_drop.setCurrentIndex(self.engine.preset.logging_level)
+
+        settings_console_layout_row_1.addWidget(self.show_console_cb)
+        settings_console_layout_row_1.addWidget(self.logging_level_drop)
+        settings_console_layout.addLayout(settings_console_layout_row_1)
+        
+
+        # =========================
+        # PLAYER SETTINGS
+        # =========================
+
+        settings_player_group = QGroupBox("Player Settings")
+        settings_player_layout = QVBoxLayout(settings_player_group)
+        settings_player_layout.setSpacing(10)
+
+        settings_player_layout_1 = QHBoxLayout()
+        settings_player_layout_1.addWidget(self.settings_shuffle_cb)
+        settings_player_layout_1.addWidget(self.settings_repeat_cb)
+        settings_player_layout_1.addWidget(self.settings_mute_cb)
+        settings_player_layout_1.addStretch()
+
+        settings_player_layout_2 = QHBoxLayout()
+        settings_player_layout_2.addWidget(self.settings_lyrics_window_cb)
+        settings_player_layout_2.addWidget(self.settings_lyrics_window_on_top_cb)
+        settings_player_layout_2.addWidget(self.settings_floating_lyrics_cb)
+        settings_player_layout_2.addWidget(self.settings_floating_lyrics_on_top_cb)
+        settings_player_layout_2.addStretch()
+
+        settings_player_layout_3 = QHBoxLayout()
+        settings_player_layout_3.addWidget(self.settings_romaji_cb)
+        settings_player_layout_3.addWidget(self.settings_translated_cb)
+        settings_player_layout_3.addStretch()
+
+        settings_player_layout.addLayout(settings_player_layout_1)
+        settings_player_layout.addLayout(settings_player_layout_2)
+        settings_player_layout.addLayout(settings_player_layout_3)
+
+        settings_group_layout.addWidget(settings_console_group)
+        settings_group_layout.addWidget(settings_player_group)
+
+        # =========================
+        # LYRICS SETTINGS
+        # =========================
+
+
+        settings_lyrics_group = QGroupBox("Lyrics Settings")
+        # font, size, color, hold time,
+
+        # =========================
+        # QUEUE SETTINGS
+        # =========================
+
+        settings_queue_group = QGroupBox("Queue Settings")
+        # if on, how many on each, 
+
+        # =========================
+        # LIBRARY SETTINGS
+        # =========================
+
+        settings_library_group = QGroupBox("Library Settings")
+        # if sorted by artist/title or title/artist, if images are shown text to each one (like queue),
+
+        # =========================
+        # THEME SETTINGS
+        # =========================
+
+        settings_theme_group = QGroupBox("Theme Settings")
+        # colors, fonts
+
+
+        settings_group_layout.addWidget(settings_console_group)
+        settings_group_layout.addWidget(settings_player_group)
+        settings_group_layout.addWidget(settings_lyrics_group)
+        settings_group_layout.addWidget(settings_queue_group)
+        settings_group_layout.addWidget(settings_library_group)
+        settings_group_layout.addWidget(settings_theme_group)
+
+        settings_layout.addWidget(settings_group)
+        settings_layout.addStretch()
         # =====================================================
         #                    PRESET TAB
         # =====================================================
@@ -1734,27 +2158,46 @@ class Player(QWidget):
         bottom.addWidget(self.load_preset_btn)
         bottom.addWidget(self.export_preset_btn)
 
-        preset_settings_layout_row_1 = QHBoxLayout()
-        self.show_console_cb = QCheckBox("Show Console")
-        self.logging_level_drop = QComboBox()
-        self.logging_level_drop.addItems([
-            "Debug",
-            "Info",
-            "Warning",
-            "Error"
-        ])
-        self.logging_level_drop.setCurrentIndex(self.engine.preset.logging_level)
-
-        preset_settings_layout_row_1.addWidget(self.show_console_cb)
-        preset_settings_layout_row_1.addWidget(self.logging_level_drop)
-
-        preset_settings_layout = QVBoxLayout()
-        preset_settings_layout.addLayout(preset_settings_layout_row_1)
 
         group_layout.addLayout(top)
         group_layout.addLayout(bottom)
-        group_layout.addLayout(preset_settings_layout)
         preset_layout.addStretch(1)
+
+
+        # =====================================================
+        #              SETTINGS CHECKBOX SYNC
+        # =====================================================
+
+        def connect_pair(main_cb, settings_cb, callback):
+            def changed(state):
+                checked = state == Qt.CheckState.Checked.value
+
+                main_cb.blockSignals(True)
+                settings_cb.blockSignals(True)
+
+                main_cb.setChecked(checked)
+                settings_cb.setChecked(checked)
+
+                main_cb.blockSignals(False)
+                settings_cb.blockSignals(False)
+
+                callback(checked)
+                self._apply_ui_to_engine()
+
+            main_cb.stateChanged.connect(changed)
+            settings_cb.stateChanged.connect(changed)
+
+        def connect_the_pairs_ig():
+            connect_pair(self.shuffle_cb, self.settings_shuffle_cb, self.engine.set_shuffle)
+            connect_pair(self.repeat_cb, self.settings_repeat_cb, self.engine.set_repeat)
+            connect_pair(self.mute_cb, self.settings_mute_cb, self.engine.set_muted)
+            connect_pair(self.lyrics_window_cb,self.settings_lyrics_window_cb,self.engine.lyrics.set_lyrics)
+            connect_pair(self.lyrics_window_on_top_cb, self.settings_lyrics_window_on_top_cb, self.engine.lyrics.set_lyrics_on_top)
+            connect_pair(self.floating_lyrics_cb, self.settings_floating_lyrics_cb, self.engine.lyrics.set_floating)
+            connect_pair(self.floating_lyrics_on_top_cb, self.settings_floating_lyrics_on_top_cb, self.engine.lyrics.set_floating_on_top)
+            connect_pair(self.romaji_cb, self.settings_romaji_cb, lambda checked: self._on_romaji_changed())
+            connect_pair(self.translated_cb, self.settings_translated_cb, lambda checked: self._on_translated_changed())
+        connect_the_pairs_ig()
 
         # =====================================================
         #                    CONNECTIONS
@@ -1765,7 +2208,6 @@ class Player(QWidget):
         self.pause_btn.clicked.connect(self.engine.pause)
         self.next_btn.clicked.connect(self.engine.next)
 
-        self.mute_cb.stateChanged.connect(lambda state: self.engine.set_muted(state == Qt.CheckState.Checked.value))
         self.mute_cb.setChecked(self.engine.preset.muted)
         self.shuffle_cb.setChecked(self.engine.preset.shuffle)
         self.repeat_cb.setChecked(self.engine.preset.repeat)
@@ -1773,12 +2215,18 @@ class Player(QWidget):
         self.lyrics_window_on_top_cb.setChecked(self.engine.preset.lyrics_window_on_top)
         self.floating_lyrics_cb.setChecked(self.engine.preset.floating_lyrics)
         self.floating_lyrics_on_top_cb.setChecked(self.engine.preset.floating_lyrics_on_top)
-        self.shuffle_cb.stateChanged.connect(lambda state: self.engine.set_shuffle(state == Qt.CheckState.Checked.value))
-        self.repeat_cb.stateChanged.connect(lambda state: self.engine.set_repeat(state == Qt.CheckState.Checked.value))
-        self.lyrics_window_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_lyrics(state == Qt.CheckState.Checked.value))
-        self.lyrics_window_on_top_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_lyrics_on_top(state == Qt.CheckState.Checked.value))
-        self.floating_lyrics_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_floating(state == Qt.CheckState.Checked.value))
-        self.floating_lyrics_on_top_cb.stateChanged.connect(lambda state: self.engine.lyrics.set_floating_on_top(state == Qt.CheckState.Checked.value))
+        self.romaji_cb.setChecked(self.engine.preset.romaji)
+        self.translated_cb.setChecked(self.engine.preset.translated)
+
+        self.settings_mute_cb.setChecked(self.engine.preset.muted)
+        self.settings_shuffle_cb.setChecked(self.engine.preset.shuffle)
+        self.settings_repeat_cb.setChecked(self.engine.preset.repeat)
+        self.settings_lyrics_window_cb.setChecked(self.engine.preset.lyrics_window)
+        self.settings_lyrics_window_on_top_cb.setChecked(self.engine.preset.lyrics_window_on_top)
+        self.settings_floating_lyrics_cb.setChecked(self.engine.preset.floating_lyrics)
+        self.settings_floating_lyrics_on_top_cb.setChecked(self.engine.preset.floating_lyrics_on_top)
+        self.settings_romaji_cb.setChecked(self.engine.preset.romaji)
+        self.settings_translated_cb.setChecked(self.engine.preset.translated)
 
         self.volume_slider.valueChanged.connect(self.engine.volume)
         self.volume_slider.valueChanged.connect(self._update_volume_label)
@@ -1796,14 +2244,20 @@ class Player(QWidget):
         self.floating_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.floating_lyrics_on_top_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.romaji_cb.stateChanged.connect(self._on_romaji_changed)
-        if ARGOS_AVAILABLE:
-            self.translated_cb.stateChanged.connect(self._on_translated_changed)
+        self.translated_cb.stateChanged.connect(self._on_translated_changed)
         self.shuffle_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.repeat_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.volume_slider.valueChanged.connect(self._apply_ui_to_engine)
         self.position_slider.sliderPressed.connect(self._position_slider_pressed)
         self.position_slider.sliderMoved.connect(self._position_slider_moved)
         self.position_slider.sliderReleased.connect(self._position_slider_released)
+
+        self.add_to_queue_btn.clicked.connect(self._add_selected_to_queue)
+        self.remove_from_queue_btn.clicked.connect(self._remove_selected_from_queue)
+        self.clear_queue_btn.clicked.connect(self._clear_queue)
+        self.queue_list.deletePressed.connect(self._remove_selected_from_queue)
+        self.song_list.itemDoubleClicked.connect(self._library_item_double_clicked)
+        self.queue_list.itemDoubleClicked.connect(self._queue_item_double_clicked)
 
         self.save_preset_btn.clicked.connect(self._save_preset_file)
         self.load_preset_btn.clicked.connect(self._load_preset_file)
@@ -1813,10 +2267,193 @@ class Player(QWidget):
         self.logging_level_drop.currentIndexChanged.connect(self._set_logging_level)
         self.logging_level_drop.currentIndexChanged.connect(self._apply_ui_to_engine)
 
+
         self.engine.songEnded.connect(self._handle_song_end)
 
         self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _queue_changed(self):
+        self.engine.preset.queue = list(self.engine.queue)
+        self._refresh_queue_list()
+        self._autosave_current_preset()
+
+    def _fill_queue(self):
+        if not self.engine.queue_auto_enabled:
+            self.engine.queue.clear()
+            self._queue_changed()
+            return
+        songs = self.get_song_list()
+        if not songs:
+            return
+
+        QUEUE_LIMIT = 15
+
+        all_indexes = list(range(len(songs)))
+
+        blocked = set(self.engine.queue)
+        blocked.add(self.current_song)
+
+        needed = QUEUE_LIMIT - len(self.engine.queue)
+        if needed <= 0:
+            return
+
+        choices = [i for i in all_indexes if i not in blocked]
+
+        if len(choices) < needed:
+            choices = [i for i in all_indexes if i != self.current_song]
+
+        if not choices:
+            return
+
+        add_count = min(needed, len(choices))
+        self.engine.queue.extend(random.sample(choices, add_count))
+
+        self._queue_changed()
+        QTimer.singleShot(1000, self._analyze_queue_loudness_top_5)
+
+    def _queue_item_double_clicked(self, item):
+        clicked_index = item.data(Qt.UserRole)
+
+        if clicked_index is None:
+            return
+
+        try:
+            clicked_index = int(clicked_index)
+        except Exception:
+            return
+
+        try:
+            queue_pos = self.engine.queue.index(clicked_index)
+        except ValueError:
+            return
+
+        current_index = self.current_song
+
+        selected_path = self.songs.get(str(clicked_index), {}).get("path")
+        if not selected_path or not os.path.isfile(selected_path):
+            return
+
+        previous_queue_items = self.engine.queue[:queue_pos + 1]
+
+        self.engine.play_order = [current_index] + previous_queue_items
+        self.engine.play_order_pos = len(self.engine.play_order) - 1
+
+        del self.engine.queue[:queue_pos + 1]
+        self._fill_queue()
+
+        self.current_song = clicked_index
+        self.engine.preset.current_song = clicked_index
+
+        self._refresh_queue_list()
+        self.engine.play(force_reload=True)
+        self._autosave_current_preset()
+
+    def _queue_song_name(self, index: int) -> str:
+        data = self.songs.get(str(index))
+        if not data:
+            return f"Missing song #{index}"
+
+        path = data.get("path")
+        if not path:
+            return f"Missing song #{index}"
+
+        return os.path.basename(path)
+
+    def _refresh_queue_list(self):
+        if not hasattr(self, "queue_list"):
+            return
+
+        self.queue_list.clear()
+
+        for pos, index in enumerate(self.engine.queue, start=1):
+            data = self.songs.get(str(index))
+            path = data.get("path") if data else None
+
+            item = QListWidgetItem(f"{self._queue_song_name(index)}")
+            item.setData(Qt.UserRole, index)
+            item.setSizeHint(QSize(260, 68))
+
+            data = self.songs.get(str(index))
+            path = data.get("path") if data else None
+
+            icon_path = BLANK_PATH
+
+            if path and os.path.isfile(path):
+                try:
+                    artist, title, cover_path = self.engine.get_data_for_path(path)
+                    icon_path = cover_path
+                except Exception:
+                    icon_path = BLANK_PATH
+
+            self.queue_list.setIconSize(QSize(64, 64))
+            item.setIcon(QIcon(icon_path))
+            self.queue_list.addItem(item)
+
+    def _analyze_queue_loudness_top_5(self):
+        if getattr(self, "_queue_loudness_busy", False):
+            return
+
+        self._queue_loudness_busy = True
+
+        try:
+            MAX_ACTIVE_WORKERS = 1
+
+            active_workers = len(getattr(self.engine, "_loudness_threads", {}))
+            if active_workers >= MAX_ACTIVE_WORKERS:
+                return
+
+            for queued_index in self.engine.queue[:5]:
+                data = self.songs.get(str(queued_index))
+                if not data:
+                    continue
+
+                path = data.get("path")
+                if not path or not os.path.isfile(path):
+                    continue
+
+                if path in self.engine._loudness_cache:
+                    continue
+
+                if path in getattr(self.engine, "_loudness_threads", {}):
+                    continue
+
+                self.engine.start_loudness_analysis(path)
+                break
+
+        finally:
+            self._queue_loudness_busy = False
+
+        QTimer.singleShot(1500, self._analyze_queue_loudness_top_5)
+
+    def _add_selected_to_queue(self):
+        self.engine.queue_auto_enabled = True
+        self.engine.queue.clear()
+        self._fill_queue()
+        self._queue_changed()
+
+    def _remove_selected_from_queue(self):
+        selected = sorted(
+            {i.row() for i in self.queue_list.selectedIndexes()},
+            reverse=True
+        )
+
+        for row in selected:
+            if 0 <= row < len(self.engine.queue):
+                self.engine.queue.pop(row)
+
+        self._fill_queue()
+        self._queue_changed()
+
+    def _clear_queue(self):
+        self.engine.queue_auto_enabled = False
+        self.engine.queue.clear()
+        self._queue_changed()
+
+    def _set_checkbox_silent(self, cb, state):
+        cb.blockSignals(True)
+        cb.setChecked(state)
+        cb.blockSignals(False)
 
     def _geometry_to_dict(self, window):
         if window is None:
@@ -1909,7 +2546,7 @@ class Player(QWidget):
 
     def _reset_console_logging(self):
         for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler):
+            if (isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)):
                 handler.stream = sys.stdout
 
     def toggle_console(self, state: bool = True):
@@ -1923,6 +2560,12 @@ class Player(QWidget):
             return
 
         ctypes.windll.kernel32.AllocConsole()
+        kernel32.SetConsoleOutputCP(65001)
+        kernel32.SetConsoleCP(65001)
+
+        global _console_owner
+        _console_owner = self
+        kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
 
         sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
         sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
@@ -1933,6 +2576,15 @@ class Player(QWidget):
         self._console_enabled = True
         logger.info("Console enabled")
         logger.info(f"Version: {player_ver}")
+
+    def _console_closed_by_user(self):
+        self._console_enabled = False
+        self.engine.preset.show_console = False
+
+        self._set_checkbox_silent(self.show_console_cb, False)
+        self._set_console_logging(None)
+
+        self._autosave_current_preset()
 
     def remove_console(self):
         if not self._console_enabled:
@@ -1946,6 +2598,9 @@ class Player(QWidget):
         sys.stderr = self._old_stderr
         sys.stdin = self._old_stdin
 
+        global _console_owner
+        kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, False)
+        _console_owner = None
         ctypes.windll.kernel32.FreeConsole()
         self._console_enabled = False
 
@@ -2161,50 +2816,76 @@ class Player(QWidget):
         self._play_song_at_index(row)
 
     def _load_lyrics_for_current_song(self):
-        old_thread = getattr(self, "_lyrics_thread", None)
+        self._lyrics_request_id = getattr(self, "_lyrics_request_id", 0) + 1
+        request_id = self._lyrics_request_id
+        song_path = self.engine.get_current_song()
 
-        if old_thread is not None:
-            try:
-                if old_thread.isRunning():
-                    old_thread.quit()
-                    old_thread.wait(1000)
-            except RuntimeError:
-                pass
-
-        self._lyrics_thread = None
-        self._lyrics_worker = None
         self._plain_floating_title = ""
         self.current_lyrics_data = []
         self.current_lyrics_index = -1
 
         self.lyrics_list.blockSignals(True)
         self.lyrics_list.clear()
-        self.lyrics_status.setText("Loading lyrics...")
+        self.lyrics_status.setText("Loading lyrics.")
 
-        self._lyrics_thread = QThread(self)
-        self._lyrics_worker = LyricsWorker(self.engine.lyrics)
-        self._lyrics_worker.moveToThread(self._lyrics_thread)
+        thread = QThread(self)
+        worker = LyricsWorker(self.engine.lyrics)
+        worker.moveToThread(thread)
 
-        self._lyrics_thread.started.connect(self._lyrics_worker.run)
-        self._lyrics_worker.finished.connect(self._lyrics_loaded)
-        self._lyrics_worker.failed.connect(self._lyrics_failed)
+        if not hasattr(self, "_lyrics_threads"):
+            self._lyrics_threads = {}
 
-        self._lyrics_worker.finished.connect(self._lyrics_thread.quit)
-        self._lyrics_worker.failed.connect(self._lyrics_thread.quit)
-        self._lyrics_thread.finished.connect(self._lyrics_thread_finished)
+        self._lyrics_threads[request_id] = (thread, worker)
 
-        self._lyrics_thread.start()
+        thread.started.connect(worker.run)
 
-    def _lyrics_thread_finished(self):
-        self._lyrics_worker = None
-        self._lyrics_thread = None
+        safe_song_path = song_path or ""
 
-    def _lyrics_failed(self, error: str):
+        worker.finished.connect(
+            lambda data, rid=request_id, path=safe_song_path:
+                self._lyrics_bridge.loaded.emit(data, rid, path)
+        )
+
+        worker.failed.connect(
+            lambda error, rid=request_id, path=safe_song_path:
+                self._lyrics_bridge.failed.emit(error, rid, path)
+        )
+
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda rid=request_id: self._lyrics_thread_finished(rid))
+
+        thread.start()
+
+    def _lyrics_thread_finished(self, request_id=None):
+        if request_id is None:
+            self._lyrics_worker = None
+            self._lyrics_thread = None
+            return
+
+        if hasattr(self, "_lyrics_threads"):
+            self._lyrics_threads.pop(request_id, None)
+
+    def _lyrics_failed(self, error: str, request_id=None, song_path=None):
+        if request_id is not None and request_id != getattr(self, "_lyrics_request_id", None):
+            return
+
+        if song_path and song_path != self.engine.get_current_song():
+            return
+
         self.lyrics_list.blockSignals(False)
         self.lyrics_status.setText("Lyrics failed to load")
         logger.warning("Lyrics worker failed: %s", error)
 
-    def _lyrics_loaded(self, data):
+    def _lyrics_loaded(self, data, request_id=None, song_path=None):
+        if request_id is not None and request_id != getattr(self, "_lyrics_request_id", None):
+            return
+
+        if song_path and song_path != self.engine.get_current_song():
+            return
         try:
             self.current_lyrics_data = data["lyrics"] if data else []
 
@@ -2426,12 +3107,10 @@ class Player(QWidget):
         PROFILE_NAME = name
         PROFILE_DIR = os.path.join(APPDATA_DIR, PROFILE_NAME)
         TEMP_DIR = os.path.join(PROFILE_DIR, "Temp")
-        #MEDIA_DIR = os.path.join(PROFILE_DIR, "Media")
         PRESET_PATH = os.path.join(PROFILE_DIR, "preset.json")
 
         os.makedirs(PROFILE_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)
-        #os.makedirs(MEDIA_DIR, exist_ok=True)
 
         try:
             with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -2662,8 +3341,21 @@ class Player(QWidget):
             self.engine.preset.current_song = self.current_song
 
             self.pause_btn.setText("Pause")
-    
-            checkboxes = [
+
+            saved_queue = data.get("preset", {}).get("queue", [])
+
+            if isinstance(saved_queue, list):
+                self.engine.queue = [
+                    int(i) for i in saved_queue
+                    if str(i) in self.songs
+                ]
+            else:
+                self.engine.queue = []
+
+            self._fill_queue()
+            self._refresh_queue_list()
+
+            widgets_to_block = [
                 self.mute_cb,
                 self.lyrics_window_cb,
                 self.lyrics_window_on_top_cb,
@@ -2673,29 +3365,54 @@ class Player(QWidget):
                 self.translated_cb,
                 self.shuffle_cb,
                 self.repeat_cb,
+
+                self.settings_mute_cb,
+                self.settings_lyrics_window_cb,
+                self.settings_lyrics_window_on_top_cb,
+                self.settings_floating_lyrics_cb,
+                self.settings_floating_lyrics_on_top_cb,
+                self.settings_romaji_cb,
+                self.settings_translated_cb,
+                self.settings_shuffle_cb,
+                self.settings_repeat_cb,
+
                 self.volume_slider,
+                self.show_console_cb,
+                self.logging_level_drop,
             ]
 
-            for cb in checkboxes:
-                cb.blockSignals(True)
+            for widget in widgets_to_block:
+                widget.blockSignals(True)
 
-            self.show_console_cb.setChecked(p.show_console)
-            self.logging_level_drop.setCurrentIndex(p.logging_level)
-            self.mute_cb.setChecked(p.muted)
-            self.lyrics_window_cb.setChecked(p.lyrics_window)
-            self.lyrics_window_on_top_cb.setChecked(p.lyrics_window_on_top)
-            self.floating_lyrics_cb.setChecked(p.floating_lyrics)
-            self.floating_lyrics_on_top_cb.setChecked(p.floating_lyrics_on_top)
-            self.shuffle_cb.setChecked(p.shuffle)
-            self.repeat_cb.setChecked(p.repeat)
+            self.show_console_cb.setChecked(bool(p.show_console))
+            self.logging_level_drop.setCurrentIndex(int(p.logging_level))
+
+            self.mute_cb.setChecked(bool(p.muted))
+            self.settings_mute_cb.setChecked(bool(p.muted))
+            self.lyrics_window_cb.setChecked(bool(p.lyrics_window))
+            self.settings_lyrics_window_cb.setChecked(bool(p.lyrics_window))
+            self.lyrics_window_on_top_cb.setChecked(bool(p.lyrics_window_on_top))
+            self.settings_lyrics_window_on_top_cb.setChecked(bool(p.lyrics_window_on_top))
+            self.floating_lyrics_cb.setChecked(bool(p.floating_lyrics))
+            self.settings_floating_lyrics_cb.setChecked(bool(p.floating_lyrics))
+            self.floating_lyrics_on_top_cb.setChecked(bool(p.floating_lyrics_on_top))
+            self.settings_floating_lyrics_on_top_cb.setChecked(bool(p.floating_lyrics_on_top))
+            self.shuffle_cb.setChecked(bool(p.shuffle))
+            self.settings_shuffle_cb.setChecked(bool(p.shuffle))
+            self.repeat_cb.setChecked(bool(p.repeat))
+            self.settings_repeat_cb.setChecked(bool(p.repeat))
             self.volume_slider.setValue(int(p.volume))
             self._update_volume_label(int(p.volume))
-            self.romaji_cb.setChecked(p.romaji)
-            if ARGOS_AVAILABLE:
-                self.translated_cb.setChecked(p.translated)
+            self.romaji_cb.setChecked(bool(p.romaji))
+            self.settings_romaji_cb.setChecked(bool(p.romaji))
+            self.translated_cb.setChecked(bool(p.translated))
+            self.settings_translated_cb.setChecked(bool(p.translated))
 
-            for cb in checkboxes:
-                cb.blockSignals(False)
+            for widget in widgets_to_block:
+                widget.blockSignals(False)
+
+            self.toggle_console(bool(p.show_console))
+            self._set_logging_level(int(p.logging_level))
 
             if self.song_list.count() > 0:
                 self.song_list.setCurrentRow(self.current_song)
@@ -2708,13 +3425,20 @@ class Player(QWidget):
                 self.setWindowTitle(
                     f"Yet Another Music Player - {self._get_current_preset_name()}"
                 )
+            
+            if p.lyrics_window:
+                self.engine.lyrics.show_window()
+                self.engine.lyrics.set_lyrics_on_top(p.lyrics_window_on_top)
+
+            if p.floating_lyrics:
+                self.engine.lyrics.show_floating_window()
+                self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
+            self._fill_queue()
 
         finally:
             self._loading_ui = False
 
         self._apply_ui_to_engine()
-
-        # UI signals already applied these states.
 
     def _apply_ui_to_engine(self) -> None:
         if getattr(self, "_loading_ui", False):
@@ -2735,6 +3459,7 @@ class Player(QWidget):
         p.volume = self.volume_slider.value()
         p.romaji = self.romaji_cb.isChecked()
         p.translated = self.translated_cb.isChecked()
+        p.queue = list(self.engine.queue)
 
         self.engine.set_shuffle(p.shuffle)
         self.engine.set_repeat(p.repeat)
@@ -2760,10 +3485,12 @@ class Player(QWidget):
             self.engine.stop()
 
             if self.engine.lyrics.window is not None:
+                self.engine.lyrics.window._force_close = True
                 self.engine.lyrics.window.close()
                 self.engine.lyrics.window = None
 
             if self.engine.lyrics.floating_window is not None:
+                self.engine.lyrics.floating_window._force_close = True
                 self.engine.lyrics.floating_window.close()
                 self.engine.lyrics.floating_window = None
 
