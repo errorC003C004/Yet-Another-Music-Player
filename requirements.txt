@@ -1,9 +1,11 @@
+argostranslate==1.11.0
+librosa==0.11.0
 mutagen==1.47.0
 pykakasi==2.3.0
+pyloudnorm==0.2.0
 pyside6==6.10.1
 pyside6_addons==6.10.1
 pyside6_essentials==6.10.1
-Requests==2.33.1
 shiboken6==6.10.1
 winrt_runtime==3.2.1
 winrt_windows_foundation==3.2.1
