@@ -22,6 +22,8 @@ README file is currently updated per version
 
 * Theme Editing (must goto %APPDATA%\errorC003C004\Music Player\{preset}\preset.json to change theme)
 
+* Audio Normalization
+
 </details>
 
 <details>
