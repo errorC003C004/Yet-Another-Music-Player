@@ -21,13 +21,17 @@ Every time I worked on it
   5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
   + Queue Saving, Windows Remember Position, settings tab
   + Removed Preset Tab and added to settings
+  + Fixed Slider Backgrounds
+  5-20-26 05:09 PM === Added Theme in Settings, Maybe fixed crashes
+  5-21-26 08:53 PM === Crash Fix, Made Normalize Audio a Toggle
 
 Known Issues:
-    * None (maybe)
+    * None
 
 Fixed Issues (last reset, 5-11-26 9:18 PM):
     * 5-13 The volume and time slider are not draggable (in a sense), just clicking slider only
     * 5-13 Translation is laggy and completely freeze the program until it finishes (audio still plays)
+    * 5-21 Crashing (I spammed next, then stopped for a moment, most likey cause: Loudness Gain. I got a debug log at the exact time of crash)
 
 Added Features (last reset, 5-11-26 9:18 PM):
     * Queue
@@ -39,6 +43,8 @@ Future Features:
     * Option to also save song current position/time
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
     * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
+    ? Keybinds
+    * 
 
 '''
 ARGOS_AVAILABLE = None
@@ -56,7 +62,7 @@ from winrt.windows.storage import StorageFile
 from winrt.windows.storage.streams import RandomAccessStreamReference
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QInputDialog, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QInputDialog, QGridLayout, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
@@ -283,6 +289,100 @@ class LyricsResultBridge(QObject):
     loaded = Signal(dict, int, str)
     failed = Signal(str, int, str)
 
+class ThemeThing(QObject):
+    def __init__(self, player):
+        super().__init__()
+        self.player = player
+        self.current_theme = DEFAULT_THEME.copy()
+
+    def refresh_current_theme(self):
+        if not hasattr(self.player, "current_theme") or self.player.current_theme is None:
+            self.player.current_theme = DEFAULT_THEME.copy()
+
+        self.current_theme = self.player.current_theme
+        return self.current_theme
+
+    def change_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "bg", color.name())
+
+    def change_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "text", color.name())
+
+    def change_muted_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "muted_text", color.name())
+
+    def change_panel_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "panel", color.name())
+
+    def change_panel_active_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "panel_active", color.name())
+
+    def change_border_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border", color.name())
+
+    def change_border_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_hover", color.name())
+
+    def change_border_selected_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_selected", color.name())
+
+    def change_border_disabled_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_disabled", color.name())
+
+    def change_button_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "button_hover", color.name())
+
+    def change_button_pressed_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "button_pressed", color.name())
+
+    def change_accent_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "accent", color.name())
+
+    def change_accent_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "accent_hover", color.name())
+
+    def change_selection_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "selection", color.name())
+
+    def change_slider_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "slider_bg", color.name())
+
+    def change_disabled_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "disabled_text", color.name())
+
+
 LF_FACESIZE = 32
 STD_OUTPUT_HANDLE = -11
 
@@ -321,6 +421,9 @@ class Preset:
     romaji: bool = False
     translated: bool = False
     queue: list[int] | None = None
+    library_sort_mode: int = 0
+    library_show_images: bool = False
+    normalize_audio: bool = True
 
 
 
@@ -1106,7 +1209,7 @@ class Audio(QObject):
         self._metadata_cache = {}
         self._loudness_cache = {}
         self.target_lufs = -14.0
-        self.normalize_audio = True
+        self.normalize_audio = self.preset.normalize_audio
         self.queue_auto_enabled = True
 
         self._session = self.audio_player.playback_session
@@ -1151,55 +1254,6 @@ class Audio(QObject):
         finally:
             self.player.current_song = old_current
 
-    def start_loudness_analysis(self, path: str):
-        if not path:
-            return
-
-        if path in self._loudness_cache:
-            return
-
-        if not hasattr(self, "_loudness_threads"):
-            self._loudness_threads = {}
-
-        if path in self._loudness_threads:
-            return
-
-        thread = QThread()
-        worker = LoudnessWorker(path, self.target_lufs)
-        worker.moveToThread(thread)
-
-        self._loudness_threads[path] = (thread, worker)
-
-        thread.started.connect(worker.run)
-
-        worker.finished.connect(self._loudness_finished)
-        worker.failed.connect(self._loudness_failed)
-
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda p=path: self._clear_loudness_worker(p))
-
-        thread.start()
-
-    def _loudness_finished(self, path: str, gain_db: float):
-        self._loudness_cache[path] = gain_db
-
-        logger.debug("Loudness gain ready: %.2f dB | %s", gain_db, os.path.basename(path))
-
-        if path == self.get_current_song():
-            self.volume(self.preset.volume)
-
-    def _loudness_failed(self, path: str, error: str):
-        logger.warning("Loudness normalization failed for %s: %s", path, error)
-        self._loudness_cache[path] = 0.0
-
-    def _clear_loudness_worker(self, path: str):
-        if hasattr(self, "_loudness_threads"):
-            self._loudness_threads.pop(path, None)
-
     def _apply_playback_state_on_qt_thread(self, state_value: int):
         try:
             state = MediaPlaybackState(state_value)
@@ -1219,6 +1273,8 @@ class Audio(QObject):
             logger.warning("Qt playback-state apply failed: %s", e)
 
     def _apply_media_opened_on_qt_thread(self):
+        if getattr(self, "_media_open_request_path", None) != self.get_current_song():
+            return
         try:
             artist, title, cover_path = self.get_data()
 
@@ -1233,9 +1289,7 @@ class Audio(QObject):
             self.player.label.setPixmap(pixmap)
             self.player.cover_path = cover_path
 
-            row = self.player.current_song
-            if 0 <= row < self.player.song_list.count():
-                self.player.song_list.setCurrentRow(row)
+            self.player._select_library_song_by_index(self.player.current_song)
 
             self._update_windows_popup(title, artist, cover_path)
             self._update_smtc_playback_status()
@@ -1343,7 +1397,80 @@ class Audio(QObject):
     def db_to_linear(self, db):
         return 10 ** (db / 20)
 
+    def start_loudness_analysis(self, path: str):
+        try:
+            logger.debug("Loudness Analysis Started: %s", path)
+            if not self.normalize_audio:
+                return
+            if not path:
+                return
+            if path in self._loudness_cache:
+                return
+            if not hasattr(self, "_loudness_threads"):
+                self._loudness_threads = {}
+            if not hasattr(self, "_pending_loudness_paths"):
+                self._pending_loudness_paths = deque(maxlen=5)
+            if len(self._loudness_threads) >= 1:
+                if path not in self._pending_loudness_paths:
+                    self._pending_loudness_paths.append(path)
+                return
+            if path in self._loudness_threads:
+                return
+
+            thread = QThread()
+            worker = LoudnessWorker(path, self.target_lufs)
+            worker.moveToThread(thread)
+
+            self._loudness_threads[path] = (thread, worker)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._loudness_finished)
+            worker.failed.connect(self._loudness_failed)
+            worker.finished.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(
+                lambda p=path: self._clear_loudness_worker(p)
+            )
+
+            thread.start()
+
+        except Exception as e:
+            logger.warning("start_loudness_analysis crashed: %s", e)
+
+    def _loudness_finished(self, path: str, gain_db: float):
+        self._loudness_cache[path] = gain_db
+
+        logger.debug(
+            "Loudness gain ready: %.2f dB | %s",
+            gain_db,
+            os.path.basename(path)
+        )
+
+        if self.normalize_audio and path == self.get_current_song():
+            self.volume(self.preset.volume)
+
+    def _loudness_failed(self, path: str, error: str):
+        logger.warning("Loudness normalization failed for %s: %s", path, error)
+        self._loudness_cache[path] = 0.0
+
+    def _clear_loudness_worker(self, path: str):
+        try:
+            if hasattr(self, "_loudness_threads"):
+                self._loudness_threads.pop(path, None)
+            if hasattr(self, "_pending_loudness_paths"):
+                while self._pending_loudness_paths:
+                    next_path = self._pending_loudness_paths.popleft()
+                    if (next_path and next_path not in self._loudness_cache and next_path not in self._loudness_threads):
+                        QTimer.singleShot(0, lambda p=next_path:self.start_loudness_analysis(p))
+                        break
+
+        except Exception as e:
+            logger.warning("_clear_loudness_worker crashed: %s", e)
+
     def get_loudness_gain(self, path, target_lufs=None):
+        global LIB_AND_PYLN_IMPORTED
         if target_lufs is None:
             target_lufs = self.target_lufs
 
@@ -1389,51 +1516,87 @@ class Audio(QObject):
         return Uri(uri_str)
 
     def play(self, force_reload: bool = False):
-        song = self.get_current_song()
-        if not song:
-            QMessageBox.warning(self.player, "No songs", "No songs are loaded.")
-            return
+        try:
+            song = self.get_current_song()
 
-        if self.queue_auto_enabled and hasattr(self.player, "_fill_queue"):
-            self.player._fill_queue()
+            if not song:
+                QMessageBox.warning(self.player, "No songs", "No songs are loaded.")
+                return
 
-        if not self.play_order:
-            self.play_order = [self.player.current_song]
-            self.play_order_pos = 0
+            if not os.path.exists(song):
+                logger.warning("Song file missing: %s", song)
+                return
 
-        artist, title, cover_path = self.get_data()
-        must_reload = force_reload or self._current_media_path != song
+            if self.queue_auto_enabled and hasattr(self.player, "_fill_queue"):
+                try:
+                    self.player._fill_queue()
+                except Exception as e:
+                    logger.warning("_fill_queue failed: %s", e)
 
-        if must_reload:
-            full_path = str(Path(song).resolve())
+            if not self.play_order:
+                self.play_order = [self.player.current_song]
+                self.play_order_pos = 0
 
-            source = MediaSource.create_from_uri(self._path_to_uri(full_path))
-            self.audio_player.source = source
-            self._current_media_path = song
-            self.player._reset_progress_ui()
+            artist, title, cover_path = self.get_data()
+            must_reload = force_reload or self._current_media_path != song
 
-        self.audio_player.play()
-        self.start_loudness_analysis(song)
-        self.volume(self.preset.volume)
+            if must_reload:
+                try:
+                    full_path = str(Path(song).resolve())
+                    source = MediaSource.create_from_uri(self._path_to_uri(full_path))
+                    self.audio_player.source = source
+                    self._current_media_path = song
+                    self._media_open_request_path = song
+                    self.player._reset_progress_ui()
+                except Exception as e:
+                    logger.warning("Media reload failed: %s", e)
+                    return
 
-        self.player._set_now_playing_info(artist, title)
-        self.player.setWindowTitle(
-            f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}"
-        )
+            try:
+                self.audio_player.play()
+            except Exception as e:
+                logger.warning("audio_player.play failed: %s", e)
+                return
 
-        pixmap = QPixmap(cover_path)
-        self.player.label.setPixmap(pixmap)
-        self.player.cover_path = cover_path
+            if self.normalize_audio:
+                self.start_loudness_analysis(song)
 
-        row = self.player.current_song
-        if 0 <= row < self.player.song_list.count():
-            self.player.song_list.setCurrentRow(row)
+            self.volume(self.preset.volume)
 
-        if not must_reload:
-            self._update_windows_popup(title, artist, cover_path)
-            self._update_smtc_playback_status()
-        if self.preset.lyrics_window:
-            self.lyrics.show_window()
+            try:
+                self.player._set_now_playing_info(artist, title)
+                self.player.setWindowTitle(f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}")
+            except Exception as e:
+                logger.warning("UI update failed: %s", e)
+
+            try:
+                pixmap = QPixmap(cover_path)
+                if not pixmap.isNull():
+                    self.player.label.setPixmap(pixmap)
+                self.player.cover_path = cover_path
+            except Exception as e:
+                logger.warning("Cover update failed: %s", e)
+
+            try:
+                self.player._select_library_song_by_index(self.player.current_song)
+            except Exception as e:
+                logger.warning("Library selection failed: %s", e)
+
+            if not must_reload:
+                try:
+                    self._update_windows_popup(title, artist, cover_path)
+                    self._update_smtc_playback_status()
+                except Exception as e:
+                    logger.warning("Popup/SMTC update failed: %s", e)
+
+            if self.preset.lyrics_window:
+                try:
+                    self.lyrics.show_window()
+                except Exception as e:
+                    logger.warning("Lyrics window failed: %s", e)
+
+        except Exception as e:
+            logger.exception("play crashed: %s", e)
 
     def stop(self):
         self.audio_player.pause()
@@ -1452,11 +1615,16 @@ class Audio(QObject):
             logger.warning("SMTC stop status failed: %s", e)
 
     def pause(self):
-        state = self._session.playback_state
-        if state == MediaPlaybackState.PLAYING:
-            self.audio_player.pause()
-        else:
-            self.audio_player.play()
+        try:
+            state = self._session.playback_state
+
+            if state == MediaPlaybackState.PLAYING:
+                self.audio_player.pause()
+            else:
+                self.audio_player.play()
+
+        except Exception as e:
+            logger.warning("pause crashed: %s", e)
 
     def set_shuffle(self, enabled: bool):
         self.preset.shuffle = bool(enabled)
@@ -1469,116 +1637,161 @@ class Audio(QObject):
         self.audio_player.is_muted = self.preset.muted
 
     def volume(self, volume: float):
-        self.preset.volume = volume
+        try:
+            self.preset.volume = volume
 
-        final_volume = float(volume) / 100.0
+            final_volume = float(volume) / 100.0
 
-        if self.normalize_audio:
-            song = self.get_current_song()
+            if self.normalize_audio:
+                song = self.get_current_song()
 
-            if song:
-                gain_db = self._loudness_cache.get(song, 0.0)
-                final_volume *= self.db_to_linear(gain_db)
+                if song:
+                    gain_db = self._loudness_cache.get(song, 0.0)
+                    final_volume *= self.db_to_linear(gain_db)
 
-        self.audio_player.volume = max(0.0, min(final_volume, 1.0))
+            self.audio_player.volume = max(0.0, min(final_volume, 1.0))
+
+        except Exception as e:
+            logger.warning("volume crashed: %s", e)
 
     def next(self):
-        if self._nav_locked:
-            self._pending_next_clicks = min(self._pending_next_clicks + 1, 5)
-            return
+        try:
+            if self._nav_locked:
+                self._pending_next_clicks = min(self._pending_next_clicks + 1, 5)
+                return
 
-        self._nav_locked = True
-        QTimer.singleShot(300, self._finish_nav)
+            self._nav_locked = True
+            QTimer.singleShot(300, self._finish_nav)
 
-        songs = self.player.get_song_list()
-        if not songs:
-            return
+            songs = self.player.get_song_list()
 
-        old_index = self.player.current_song
+            if not songs:
+                self._finish_nav()
+                return
 
-        if self.queue_auto_enabled and self.queue:
-            new_index = self.queue.pop(0)
+            old_index = self.player.current_song
 
-            if hasattr(self.player, "_queue_changed"):
-                self.player._queue_changed()
+            if self.queue_auto_enabled and self.queue:
+                try:
+                    new_index = self.queue.pop(0)
+                except Exception:
+                    self._finish_nav()
+                    return
 
-            if self.play_order_pos < len(self.play_order) - 1:
-                self.play_order = self.play_order[:self.play_order_pos + 1]
+                if hasattr(self.player, "_queue_changed"):
+                    try:
+                        self.player._queue_changed()
+                    except Exception:
+                        pass
 
-            self.play_order.append(new_index)
-            self.play_order_pos = len(self.play_order) - 1
+                if self.play_order_pos < len(self.play_order) - 1:
+                    self.play_order = self.play_order[:self.play_order_pos + 1]
 
-            if hasattr(self.player, "_refresh_queue_list"):
-                self.player._refresh_queue_list()
-            
-            if hasattr(self.player, "_fill_queue"):
-                self.player._fill_queue()
+                self.play_order.append(new_index)
+                self.play_order_pos = len(self.play_order) - 1
 
-        elif self.play_order_pos < len(self.play_order) - 1:
-            self.play_order_pos += 1
-            new_index = self.play_order[self.play_order_pos]
+                if hasattr(self.player, "_refresh_queue_list"):
+                    try:
+                        self.player._refresh_queue_list()
+                    except Exception:
+                        pass
 
-        else:
-            if self.preset.shuffle:
-                new_index = self._pick_shuffle_song(old_index, songs)
-                self.recent_shuffle.append(new_index)
+                if hasattr(self.player, "_fill_queue"):
+                    try:
+                        self.player._fill_queue()
+                    except Exception:
+                        pass
+
+            elif self.play_order_pos < len(self.play_order) - 1:
+                self.play_order_pos += 1
+                new_index = self.play_order[self.play_order_pos]
+
             else:
-                new_index = (old_index + 1) % len(songs)
+                if self.preset.shuffle:
+                    new_index = self._pick_shuffle_song(old_index, songs)
+                    self.recent_shuffle.append(new_index)
+                else:
+                    new_index = (old_index + 1) % len(songs)
 
-            self.play_order.append(new_index)
-            self.play_order_pos = len(self.play_order) - 1
+                self.play_order.append(new_index)
+                self.play_order_pos = len(self.play_order) - 1
 
-        self.history.append(old_index)
-        self.player.current_song = new_index
-        self.preset.current_song = new_index
-        self.play(force_reload=True)
-        self.player._autosave_current_preset()
+            self.history.append(old_index)
+
+            self.player.current_song = new_index
+            self.preset.current_song = new_index
+
+            self.play(force_reload=True)
+
+            self.player._autosave_current_preset()
+
+        except Exception as e:
+            logger.exception("next crashed: %s", e)
+            self._finish_nav()
 
     def back(self):
-        if self._nav_locked:
-            self._pending_back_clicks = min(self._pending_back_clicks + 1, 5)
-            return
+        try:
+            if self._nav_locked:
+                self._pending_back_clicks = min(self._pending_back_clicks + 1, 5)
+                return
 
-        self._nav_locked = True
-        QTimer.singleShot(300, self._finish_nav)
+            self._nav_locked = True
+            QTimer.singleShot(300, self._finish_nav)
 
-        songs = self.player.get_song_list()
-        if not songs:
-            return
+            songs = self.player.get_song_list()
 
-        leaving_index = self.player.current_song
+            if not songs:
+                self._finish_nav()
+                return
 
-        if self.play_order_pos > 0:
-            self.play_order_pos -= 1
-            previous_index = self.play_order[self.play_order_pos]
-            self.player.current_song = previous_index
+            leaving_index = self.player.current_song
 
-        elif self.history:
-            previous_index = self.history.pop()
-            self.player.current_song = previous_index
+            if self.play_order_pos > 0:
+                self.play_order_pos -= 1
+                previous_index = self.play_order[self.play_order_pos]
+                self.player.current_song = previous_index
 
-        else:
+            elif self.history:
+                previous_index = self.history.pop()
+                self.player.current_song = previous_index
+
+            else:
+                self._finish_nav()
+                return
+
+            if leaving_index not in self.queue:
+                self.queue.insert(0, leaving_index)
+
+            if len(self.queue) > 15:
+                self.queue = self.queue[:15]
+
+            if hasattr(self.player, "_fill_queue"):
+                try:
+                    self.player._fill_queue()
+                except Exception:
+                    pass
+
+            if hasattr(self.player, "_queue_changed"):
+                try:
+                    self.player._queue_changed()
+                except Exception:
+                    pass
+
+            if hasattr(self.player, "_refresh_queue_list"):
+                try:
+                    self.player._refresh_queue_list()
+                except Exception:
+                    pass
+
+            self.preset.current_song = self.player.current_song
+
+            self.play(force_reload=True)
+
+            self.player._autosave_current_preset()
+
+        except Exception as e:
+            logger.exception("back crashed: %s", e)
             self._finish_nav()
-            return
-
-        if leaving_index not in self.queue:
-            self.queue.insert(0, leaving_index)
-
-        if len(self.queue) > 15:
-            self.queue = self.queue[:15]
-
-        if hasattr(self.player, "_fill_queue"):
-            self.player._fill_queue()
-
-        if hasattr(self.player, "_queue_changed"):
-            self.player._queue_changed()
-
-        if hasattr(self.player, "_refresh_queue_list"):
-            self.player._refresh_queue_list()
-
-        self.preset.current_song = self.player.current_song
-        self.play(force_reload=True)
-        self.player._autosave_current_preset()
 
     def _seconds_from_timespan(self, value) -> float:
         if value is None:
@@ -1731,6 +1944,8 @@ class Player(QWidget):
         super().__init__()
         os.system('cls')
         self.engine = Audio(self)
+        self.current_theme = DEFAULT_THEME.copy()
+        self.theme = ThemeThing(self)
         self.songs: Dict[str, Dict] = {}
         self._loading_ui = False
         self._autosave_timer = QTimer(self)
@@ -1747,6 +1962,9 @@ class Player(QWidget):
         self._lyrics_bridge = LyricsResultBridge()
         self._lyrics_bridge.loaded.connect(self._lyrics_loaded)
         self._lyrics_bridge.failed.connect(self._lyrics_failed)
+        self._lyrics_load_timer = QTimer(self)
+        self._lyrics_load_timer.setSingleShot(True)
+        self._lyrics_load_timer.timeout.connect(self._load_lyrics_for_current_song_now)
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
         self.setWindowIcon(QIcon(ICON_PATH))
@@ -1817,7 +2035,6 @@ class Player(QWidget):
         self.romaji_cb = QCheckBox("Romaji")
         self.translated_cb = QCheckBox("Translation")
 
-        # Settings tab duplicate checkboxes
         self.settings_mute_cb = QCheckBox("Mute")
         self.settings_shuffle_cb = QCheckBox("Shuffle")
         self.settings_repeat_cb = QCheckBox("Repeat")
@@ -1827,6 +2044,8 @@ class Player(QWidget):
         self.settings_floating_lyrics_on_top_cb = QCheckBox("Always on Top")
         self.settings_romaji_cb = QCheckBox("Romaji")
         self.settings_translated_cb = QCheckBox("Translation")
+        
+        self.settings_normalize_audio_cb = QCheckBox("Normalize Audio")
 
         self.volume_slider = JumpSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
@@ -1867,6 +2086,7 @@ class Player(QWidget):
 
         self.song_list = LibraryListWidget()
         self.song_list.setObjectName("SongList")
+        self.song_list.setIconSize(QSize(52, 52))
         self.song_list.setMinimumHeight(260)
         self.song_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.song_list.deletePressed.connect(self._delete_selected_songs)
@@ -1993,13 +2213,11 @@ class Player(QWidget):
         self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
         queue_buttons = QHBoxLayout()
-        self.add_to_queue_btn = QPushButton("Add 15 Random")
+        self.add_to_queue_btn = QPushButton("Refresh Queue")
         self.remove_from_queue_btn = QPushButton("Remove Selected")
-        self.clear_queue_btn = QPushButton("Clear Queue")
 
         queue_buttons.addWidget(self.add_to_queue_btn)
         queue_buttons.addWidget(self.remove_from_queue_btn)
-        queue_buttons.addWidget(self.clear_queue_btn)
         queue_buttons.addStretch()
 
         queue_hint = QLabel("Queue plays before shuffle/normal next.")
@@ -2105,6 +2323,7 @@ class Player(QWidget):
         settings_player_layout_1.addWidget(self.settings_shuffle_cb)
         settings_player_layout_1.addWidget(self.settings_repeat_cb)
         settings_player_layout_1.addWidget(self.settings_mute_cb)
+        settings_player_layout_1.addWidget(self.settings_normalize_audio_cb)
         settings_player_layout_1.addStretch()
 
         settings_player_layout_2 = QHBoxLayout()
@@ -2143,15 +2362,83 @@ class Player(QWidget):
         # =========================
 
         settings_library_group = QGroupBox("Library Settings")
-        # if sorted by artist/title or title/artist, if images are shown text to each one (like queue),
+        settings_library_layout = QHBoxLayout(settings_library_group)
+
+        self.library_sort_drop = QComboBox()
+        self.library_sort_drop.addItems([
+            "File Name",
+            "Artist - Title",
+            "Title - Artist",
+        ])
+
+        self.library_images_cb = QCheckBox("Show Images")
+
+        settings_library_layout.addWidget(self.library_sort_drop, 1)
+        settings_library_layout.addWidget(self.library_images_cb)
+        settings_library_layout.addStretch()
 
         # =========================
         # THEME SETTINGS
         # =========================
 
-        settings_theme_group = QGroupBox("Theme Settings")
-        # colors, fonts
+        settings_theme_group = QGroupBox("Theme")
+        settings_theme_layout = QHBoxLayout(settings_theme_group)
 
+        self.theme_color_drop = QComboBox()
+        self.theme_color_drop.addItems([
+            "Background",
+            "Text",
+            "Muted Text",
+            "Panel",
+            "Active Panel",
+            "Border",
+            "Border Hover",
+            "Selected Border",
+            "Disabled Border",
+            "Button Hover",
+            "Button Pressed",
+            "Accent",
+            "Accent Hover",
+            "Selection",
+            "Slider Background",
+            "Disabled Text",
+        ])
+
+        self.theme_color_keys = [
+            "bg",
+            "text",
+            "muted_text",
+            "panel",
+            "panel_active",
+            "border",
+            "border_hover",
+            "border_selected",
+            "border_disabled",
+            "button_hover",
+            "button_pressed",
+            "accent",
+            "accent_hover",
+            "selection",
+            "slider_bg",
+            "disabled_text",
+        ]
+
+        self.edit_theme_color_btn = QPushButton("Edit Color")
+        self.reset_selected_theme_btn = QPushButton("Reset Selected")
+        self.reset_all_theme_btn = QPushButton("Reset All")
+
+        settings_theme_layout.addWidget(self.theme_color_drop, 1)
+        settings_theme_layout.addWidget(self.edit_theme_color_btn)
+        settings_theme_layout.addWidget(self.reset_selected_theme_btn)
+        settings_theme_layout.addWidget(self.reset_all_theme_btn)
+
+        self.edit_theme_color_btn.clicked.connect(self._edit_selected_theme_color)
+        self.reset_selected_theme_btn.clicked.connect(self._reset_selected_theme_color)
+        self.reset_all_theme_btn.clicked.connect(self._reset_all_theme)
+
+        # =========================
+        # WIDGETS ADDED
+        # =========================
 
         settings_boxed_layout.addWidget(settings_console_group)
         settings_boxed_layout.addWidget(settings_preset_group)
@@ -2218,16 +2505,6 @@ class Player(QWidget):
         self.romaji_cb.setChecked(self.engine.preset.romaji)
         self.translated_cb.setChecked(self.engine.preset.translated)
 
-        self.settings_mute_cb.setChecked(self.engine.preset.muted)
-        self.settings_shuffle_cb.setChecked(self.engine.preset.shuffle)
-        self.settings_repeat_cb.setChecked(self.engine.preset.repeat)
-        self.settings_lyrics_window_cb.setChecked(self.engine.preset.lyrics_window)
-        self.settings_lyrics_window_on_top_cb.setChecked(self.engine.preset.lyrics_window_on_top)
-        self.settings_floating_lyrics_cb.setChecked(self.engine.preset.floating_lyrics)
-        self.settings_floating_lyrics_on_top_cb.setChecked(self.engine.preset.floating_lyrics_on_top)
-        self.settings_romaji_cb.setChecked(self.engine.preset.romaji)
-        self.settings_translated_cb.setChecked(self.engine.preset.translated)
-
         self.volume_slider.valueChanged.connect(self.engine.volume)
         self.volume_slider.valueChanged.connect(self._update_volume_label)
 
@@ -2254,7 +2531,6 @@ class Player(QWidget):
 
         self.add_to_queue_btn.clicked.connect(self._add_selected_to_queue)
         self.remove_from_queue_btn.clicked.connect(self._remove_selected_from_queue)
-        self.clear_queue_btn.clicked.connect(self._clear_queue)
         self.queue_list.deletePressed.connect(self._remove_selected_from_queue)
         self.song_list.itemDoubleClicked.connect(self._library_item_double_clicked)
         self.queue_list.itemDoubleClicked.connect(self._queue_item_double_clicked)
@@ -2267,12 +2543,151 @@ class Player(QWidget):
         self.show_console_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.logging_level_drop.currentIndexChanged.connect(self._set_logging_level)
         self.logging_level_drop.currentIndexChanged.connect(self._apply_ui_to_engine)
+        # Player
+        self.settings_mute_cb.setChecked(self.engine.preset.muted)
+        self.settings_shuffle_cb.setChecked(self.engine.preset.shuffle)
+        self.settings_repeat_cb.setChecked(self.engine.preset.repeat)
+        self.settings_lyrics_window_cb.setChecked(self.engine.preset.lyrics_window)
+        self.settings_lyrics_window_on_top_cb.setChecked(self.engine.preset.lyrics_window_on_top)
+        self.settings_floating_lyrics_cb.setChecked(self.engine.preset.floating_lyrics)
+        self.settings_floating_lyrics_on_top_cb.setChecked(self.engine.preset.floating_lyrics_on_top)
+        self.settings_romaji_cb.setChecked(self.engine.preset.romaji)
+        self.settings_translated_cb.setChecked(self.engine.preset.translated)
+        self.settings_normalize_audio_cb.setChecked(self.engine.preset.normalize_audio)
+        self.settings_normalize_audio_cb.stateChanged.connect(self._apply_ui_to_engine)
+        # Library
+        self.library_sort_drop.currentIndexChanged.connect(self._library_settings_changed)
+        self.library_images_cb.stateChanged.connect(self._library_settings_changed)
 
 
         self.engine.songEnded.connect(self._handle_song_end)
 
-        self.current_theme = DEFAULT_THEME.copy()
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _select_library_song_by_index(self, song_index: int):
+        if not hasattr(self, "song_list"):
+            return
+
+        for row in range(self.song_list.count()):
+            item = self.song_list.item(row)
+            if item is None:
+                continue
+
+            real_index = item.data(Qt.UserRole)
+            if real_index is None:
+                continue
+
+            if int(real_index) == int(song_index):
+                self.song_list.setCurrentRow(row)
+                return
+
+    def _library_settings_changed(self):
+        self.engine.preset.library_sort_mode = self.library_sort_drop.currentIndex()
+        self.engine.preset.library_show_images = self.library_images_cb.isChecked()
+
+        self._refresh_library_list()
+        self._autosave_current_preset()
+
+    def _library_song_display(self, index: int) -> str:
+        data = self.songs.get(str(index))
+        path = data.get("path") if data else None
+
+        if not path:
+            return f"Missing song #{index}"
+
+        if self.engine.preset.library_sort_mode == 0:
+            return os.path.basename(path)
+
+        old_current = self.current_song
+
+        try:
+            self.current_song = index
+            artist, title, cover_path = self.engine.get_data()
+        finally:
+            self.current_song = old_current
+
+        if self.engine.preset.library_sort_mode == 1:
+            return f"{artist} - {title}"
+
+        return f"{title} - {artist}"
+
+    def _refresh_library_list(self):
+        if not hasattr(self, "song_list"):
+            return
+
+        self.song_list.clear()
+
+        indexes = list(range(len(self.songs)))
+
+        def sort_key(i):
+            return self._library_song_display(i).lower()
+
+        if self.engine.preset.library_sort_mode != 0:
+            indexes.sort(key=sort_key)
+
+        for index in indexes:
+            data = self.songs.get(str(index))
+            path = data.get("path") if data else None
+
+            item = QListWidgetItem(self._library_song_display(index))
+            item.setData(Qt.UserRole, index)
+
+            if self.engine.preset.library_show_images:
+                item.setSizeHint(QSize(260, 68))
+
+                icon_path = BLANK_PATH
+
+                if path and os.path.isfile(path):
+                    try:
+                        artist, title, cover_path = self.engine.get_data_for_path(path)
+
+                        if cover_path and os.path.exists(cover_path):
+                            icon_path = cover_path
+
+                    except Exception as e:
+                        logger.warning("Library cover load failed: %s", e)
+
+                item.setIcon(QIcon(icon_path))
+            self.song_list.addItem(item)
+
+    def _edit_selected_theme_color(self):
+        index = self.theme_color_drop.currentIndex()
+
+        if index < 0 or index >= len(self.theme_color_keys):
+            return
+
+        key = self.theme_color_keys[index]
+
+        current = self.current_theme.get(key, DEFAULT_THEME.get(key, "#ffffff"))
+        color = QColorDialog.getColor(
+            initial=Qt.GlobalColor.white,
+            parent=self,
+            title=f"Choose {self.theme_color_drop.currentText()} Color"
+        )
+
+        if color.isValid():
+            set_theme_value(self.theme, key, color.name())
+
+    def _reset_selected_theme_color(self):
+        index = self.theme_color_drop.currentIndex()
+
+        if index < 0 or index >= len(self.theme_color_keys):
+            return
+
+        key = self.theme_color_keys[index]
+
+        if key not in DEFAULT_THEME:
+            return
+
+        set_theme_value(self.theme, key, DEFAULT_THEME[key])
+
+    def _reset_all_theme(self):
+        self.current_theme = DEFAULT_THEME.copy()
+        self.theme.current_theme = self.current_theme
+
+        apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+        self._autosave_current_preset()
 
     def _queue_changed(self):
         self.engine.preset.queue = list(self.engine.queue)
@@ -2387,11 +2802,14 @@ class Player(QWidget):
                 except Exception:
                     icon_path = BLANK_PATH
 
-            self.queue_list.setIconSize(QSize(64, 64))
+            self.queue_list.setIconSize(QSize(52, 52))
             item.setIcon(QIcon(icon_path))
             self.queue_list.addItem(item)
 
     def _analyze_queue_loudness_top_5(self):
+        logger.debug("from analyze_queue_loudness_top_5, normalize_audio: %s", self.engine.preset.normalize_audio)
+        if not self.engine.preset.normalize_audio:
+            return
         if getattr(self, "_queue_loudness_busy", False):
             return
 
@@ -2418,7 +2836,7 @@ class Player(QWidget):
 
                 if path in getattr(self.engine, "_loudness_threads", {}):
                     continue
-
+                
                 self.engine.start_loudness_analysis(path)
                 break
 
@@ -2444,11 +2862,6 @@ class Player(QWidget):
                 self.engine.queue.pop(row)
 
         self._fill_queue()
-        self._queue_changed()
-
-    def _clear_queue(self):
-        self.engine.queue_auto_enabled = False
-        self.engine.queue.clear()
         self._queue_changed()
 
     def _set_checkbox_silent(self, cb, state):
@@ -2806,17 +3219,29 @@ class Player(QWidget):
 
             self.current_song = row
             self.engine.preset.current_song = row
-            self.song_list.setCurrentRow(row)
+            self._select_library_song_by_index(self.current_song)
             self.engine._commit_current_to_timeline(row)
 
         self.engine.play(force_reload=True)
         self._autosave_current_preset()
 
     def _library_item_double_clicked(self, item):
-        row = self.song_list.row(item)
-        self._play_song_at_index(row)
+        index = item.data(Qt.UserRole)
+
+        if index is None:
+            return
+
+        self._play_song_at_index(int(index))
 
     def _load_lyrics_for_current_song(self):
+        self._lyrics_request_id = getattr(self, "_lyrics_request_id", 0) + 1
+        self.current_lyrics_data = []
+        self.current_lyrics_index = -1
+        self.lyrics_list.clear()
+        self.lyrics_status.setText("Loading lyrics.")
+        self._lyrics_load_timer.start(700)
+
+    def _load_lyrics_for_current_song_now(self):
         self._lyrics_request_id = getattr(self, "_lyrics_request_id", 0) + 1
         request_id = self._lyrics_request_id
         song_path = self.engine.get_current_song()
@@ -2871,6 +3296,8 @@ class Player(QWidget):
             self._lyrics_threads.pop(request_id, None)
 
     def _lyrics_failed(self, error: str, request_id=None, song_path=None):
+        if song_path != self.engine.get_current_song():
+            return
         if request_id is not None and request_id != getattr(self, "_lyrics_request_id", None):
             return
 
@@ -2882,6 +3309,8 @@ class Player(QWidget):
         logger.warning("Lyrics worker failed: %s", error)
 
     def _lyrics_loaded(self, data, request_id=None, song_path=None):
+        if song_path != self.engine.get_current_song():
+            return
         if request_id is not None and request_id != getattr(self, "_lyrics_request_id", None):
             return
 
@@ -3049,8 +3478,10 @@ class Player(QWidget):
 
             index = str(len(self.songs))
             self.songs[index] = {"path": path}
-            item = QListWidgetItem(os.path.basename(path))
-            self.song_list.addItem(item)
+            if added:
+                self._refresh_library_list()
+                self.engine._update_history_limit()
+                self._autosave_current_preset()
 
             last_index = int(index)
             added = True
@@ -3437,10 +3868,14 @@ class Player(QWidget):
                 self.settings_translated_cb,
                 self.settings_shuffle_cb,
                 self.settings_repeat_cb,
+                self.settings_normalize_audio_cb,
 
                 self.volume_slider,
                 self.show_console_cb,
                 self.logging_level_drop,
+
+                self.library_sort_drop,
+                self.library_images_cb,
             ]
 
             for widget in widgets_to_block:
@@ -3469,6 +3904,9 @@ class Player(QWidget):
             self.settings_romaji_cb.setChecked(bool(p.romaji))
             self.translated_cb.setChecked(bool(p.translated))
             self.settings_translated_cb.setChecked(bool(p.translated))
+            self.library_sort_drop.setCurrentIndex(p.library_sort_mode)
+            self.library_images_cb.setChecked(bool(p.library_show_images))
+            self.settings_normalize_audio_cb.setChecked(bool(p.normalize_audio))
 
             for widget in widgets_to_block:
                 widget.blockSignals(False)
@@ -3477,7 +3915,7 @@ class Player(QWidget):
             self._set_logging_level(int(p.logging_level))
 
             if self.song_list.count() > 0:
-                self.song_list.setCurrentRow(self.current_song)
+                self._select_library_song_by_index(self.current_song)
                 self.setWindowTitle(
                     f"Yet Another Music Player - {self._get_current_preset_name()} - {self._get_current_song_name()}"
                 )
@@ -3495,6 +3933,9 @@ class Player(QWidget):
             if p.floating_lyrics:
                 self.engine.lyrics.show_floating_window()
                 self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
+            self.engine.preset.normalize_audio = p.normalize_audio
+            self.engine.normalize_audio = p.normalize_audio
+            self._library_settings_changed()
             self._fill_queue()
 
         finally:
@@ -3522,7 +3963,9 @@ class Player(QWidget):
         p.romaji = self.romaji_cb.isChecked()
         p.translated = self.translated_cb.isChecked()
         p.queue = list(self.engine.queue)
+        p.normalize_audio = self.settings_normalize_audio_cb.isChecked()
 
+        self.engine.normalize_audio = p.normalize_audio
         self.engine.set_shuffle(p.shuffle)
         self.engine.set_repeat(p.repeat)
         self.engine.set_muted(p.muted)
@@ -3692,15 +4135,26 @@ QCheckBox::indicator:checked:hover {{
 }}
 
 /* Slider */
+QSlider {{
+    background: transparent;
+    border: none;
+}}
 QSlider::groove:horizontal {{
     height: 6px;
-    background: {slider_bg};
-    border-radius: 3px;
+    border: none;
+    background: transparent;
 }}
+
 QSlider::sub-page:horizontal {{
     background: {accent};
     border-radius: 3px;
 }}
+
+QSlider::add-page:horizontal {{
+    background: {slider_bg};
+    border-radius: 3px;
+}}
+
 QSlider::handle:horizontal {{
     width: 18px;
     margin: -7px 0;
@@ -3708,6 +4162,7 @@ QSlider::handle:horizontal {{
     background: {accent};
     border: 1px solid {accent};
 }}
+
 QSlider::handle:horizontal:hover {{
     background: {accent_hover};
     border-color: {accent_hover};
@@ -3776,6 +4231,7 @@ QLabel#FloatingLyricsLabel {{
 }}
 """
 
+
 DEFAULT_THEME = {
     "font": "Noto Sans",
     "lyrics_en_font": "Segoe UI Variable",
@@ -3827,7 +4283,14 @@ def apply_theme(app: QApplication, settings: dict):
         w.update()
 
 def set_theme_value(self, key: str, value: str):
+    if self.current_theme is None:
+        self.current_theme = DEFAULT_THEME.copy()
+
     self.current_theme[key] = value
+
+    if hasattr(self, "player"):
+        self.player.current_theme = self.current_theme
+
     apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
 if __name__ == "__main__":
