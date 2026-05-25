@@ -2,6 +2,8 @@
 
 Took Inspo from [foobar2000](https://www.foobar2000.org/) and [Spotify](https://www.spotify.com/)
 
+**Python Version Used: [3.13.3](https://www.python.org/downloads/release/python-3133/)**
+
 README file is currently updated per version
 <details>
 <summary>Features:</summary>
