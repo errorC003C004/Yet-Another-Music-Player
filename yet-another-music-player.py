@@ -24,6 +24,8 @@ Every time I worked on it
   + Fixed Slider Backgrounds
   5-20-26 05:09 PM === Added Theme in Settings, Maybe fixed crashes
   5-21-26 08:53 PM === Crash Fix, Made Normalize Audio a Toggle
+  1.1.1
+  5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
 
 Known Issues:
     * None
@@ -35,7 +37,6 @@ Fixed Issues (last reset, 5-11-26 9:18 PM):
 
 Added Features (last reset, 5-11-26 9:18 PM):
     * Queue
-    * Queue Saving
     * Windows Remember Position
 
 Future Features:
@@ -43,8 +44,7 @@ Future Features:
     * Option to also save song current position/time
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
     * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
-    ? Keybinds
-    * 
+    * Youtube Imbedded Support
 
 '''
 ARGOS_AVAILABLE = None
@@ -81,7 +81,7 @@ import logging
 import html
 LIB_AND_PYLN_IMPORTED = False
 KAKASI_IMPORTED = False
-player_ver = "1.1.0"
+player_ver = "1.1.1"
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -1168,7 +1168,7 @@ class LyricStuff(QObject):
 
             window.setGeometry(QRect(x, y, w, h))
         except Exception as e:
-            logger.warning("Window geometry restore failed: %s", e)
+            logger.warning("Window geometry restore failed: %s", e)\
 
     def _save_window_geometry(self):
         preset = self.engine.preset
@@ -1198,6 +1198,10 @@ class Audio(QObject):
         self.forward_history = deque(maxlen=50)
         self.recent_shuffle = deque(maxlen=10)
         self.play_order = deque(maxlen=50)
+
+        self.pause_timer = QTimer()
+        self.pause_timer.setSingleShot(True)
+        self.pause_timer.timeout.connect(self._pause_timer_finished)
 
         self._current_media_path = None
         self._can_use_forward = False
@@ -1259,9 +1263,9 @@ class Audio(QObject):
             state = MediaPlaybackState(state_value)
 
             if state == MediaPlaybackState.PLAYING:
-                self.player.pause_btn.setText("Pause")
+                pass
             elif state == MediaPlaybackState.PAUSED:
-                self.player.pause_btn.setText("Resume")
+                pass
             elif state == MediaPlaybackState.OPENING:
                 pass
             else:
@@ -1594,6 +1598,11 @@ class Audio(QObject):
                     self.lyrics.show_window()
                 except Exception as e:
                     logger.warning("Lyrics window failed: %s", e)
+            if self.preset.floating_lyrics:
+                try:
+                    self.lyrics.show_floating_window()
+                except Exception as e:
+                    logger.warning("Floating lyrics failed: %s", e)
 
         except Exception as e:
             logger.exception("play crashed: %s", e)
@@ -1620,11 +1629,33 @@ class Audio(QObject):
 
             if state == MediaPlaybackState.PLAYING:
                 self.audio_player.pause()
+                self.player.pause_btn.setText("Resume")
+                logger.debug("Paused")
+
+                self.pause_timer.start(5_000)
+
             else:
+                if self.pause_timer.isActive():
+                    self.pause_timer.stop()
+                else:
+                    if self.preset.lyrics_window:
+                        self.lyrics.show_window()
+                    if self.preset.floating_lyrics:
+                        self.lyrics.show_floating_window()
+
                 self.audio_player.play()
+                self.player.pause_btn.setText("Pause")
+                logger.debug("Resumed")
 
         except Exception as e:
             logger.warning("pause crashed: %s", e)
+
+    def _pause_timer_finished(self):
+        if self.preset.lyrics_window:
+            self.lyrics.hide_window()
+        if self.preset.floating_lyrics:
+            self.lyrics.hide_floating_window()
+        logger.debug("Pause timer finished")
 
     def set_shuffle(self, enabled: bool):
         self.preset.shuffle = bool(enabled)
@@ -2807,7 +2838,6 @@ class Player(QWidget):
             self.queue_list.addItem(item)
 
     def _analyze_queue_loudness_top_5(self):
-        logger.debug("from analyze_queue_loudness_top_5, normalize_audio: %s", self.engine.preset.normalize_audio)
         if not self.engine.preset.normalize_audio:
             return
         if getattr(self, "_queue_loudness_busy", False):
