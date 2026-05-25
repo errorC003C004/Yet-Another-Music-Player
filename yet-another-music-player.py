@@ -15,7 +15,7 @@ Every time I worked on it
   5-10-26 09:30 PM === Added Translation Support
   5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
   5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
-  + Sliders and Translation Bug Fixed
+  + Sliders and Translation Bug Fixede
   5-17-26 12:11 AM === small bug fixes,
   + Added Queue button (auto queing coming soon), also made the loudness thingy no longer logger.info (its logger.debug)
   5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
@@ -26,6 +26,7 @@ Every time I worked on it
   5-21-26 08:53 PM === Crash Fix, Made Normalize Audio a Toggle
   1.1.1
   5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
+  5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
 
 Known Issues:
     * None
@@ -37,7 +38,7 @@ Fixed Issues (last reset, 5-11-26 9:18 PM):
 
 Added Features (last reset, 5-11-26 9:18 PM):
     * Queue
-    * Windows Remember Position
+    * Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
 
 Future Features:
     * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
@@ -45,6 +46,8 @@ Future Features:
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
     * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
     * Youtube Imbedded Support
+    * Tabs Draggable and saved
+    * Queue Slots Draggable
 
 '''
 ARGOS_AVAILABLE = None
@@ -72,16 +75,23 @@ from typing import Dict, List
 from shiboken6 import isValid
 import json
 import base64
-from urllib.request import urlopen
+from urllib.parse import urlencode, quote
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError, URLError
 import random
 from datetime import timedelta
 import re
 import hashlib
 import logging
 import html
+
+
+from dotenv import load_dotenv
+load_dotenv()
+
 LIB_AND_PYLN_IMPORTED = False
 KAKASI_IMPORTED = False
-player_ver = "1.1.1"
+player_ver = "1.2"
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
@@ -289,6 +299,7 @@ class LyricsResultBridge(QObject):
     loaded = Signal(dict, int, str)
     failed = Signal(str, int, str)
 
+
 class ThemeThing(QObject):
     def __init__(self, player):
         super().__init__()
@@ -382,6 +393,277 @@ class ThemeThing(QObject):
         if color.isValid():
             set_theme_value(self, "disabled_text", color.name())
 
+class LyricsFetcher(QObject):
+    def __init__(self, LyricStuff):
+        super().__init__()
+        self.lyric_stuff = LyricStuff
+        self.SEARCH_HEADERS = {
+            "user-agent": "Mozilla/5.0",
+            "accept": "application/json",
+            "origin": "https://www.musixmatch.com",
+            "referer": "https://www.musixmatch.com/",
+        }
+
+        self.LYRICS_HEADERS = {
+            "user-agent": "Mozilla/5.0",
+        }
+
+    def _get_json(self, url, params=None, headers=None, timeout=10):
+        if params:
+            query = urlencode(params, quote_via=quote)
+            url = f"{url}?{query}"
+
+        req = Request(url, headers=headers or {}, method="GET")
+
+        try:
+            with urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+                logger.debug("Lyrics Response: %s", raw[:300])
+                return json.loads(raw)
+
+        except HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            logger.debug(f"HTTP error: {e.code} {e.reason}")
+            logger.debug("DEBUG BODY: %s", body[:300])
+
+        except URLError as e:
+            logger.debug(f"URL error: {e.reason}")
+
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON error: {e}")
+
+        return {}
+
+    def fetch(self, artist, title):
+        logger.debug("Started Lyrics Fetch (%s - %s)", artist, title)
+        self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.MUSIXMATCH_USER_TOKEN
+
+        tracks = self.search_track(artist, title)
+
+        if tracks:
+            for item in tracks:
+                track = item.get("track", {})
+                track_id = track.get("track_id")
+
+                has_lyrics = track.get("has_lyrics")
+                has_subtitles = track.get("has_subtitles")
+
+                if not has_lyrics and not has_subtitles:
+                    logger.debug(
+                        "Skipping no-lyrics result: %s - %s",
+                        track.get("artist_name"),
+                        track.get("track_name"),
+                    )
+                    continue
+
+                if not track_id:
+                    continue
+
+                logger.debug("Trying: %s - %s", track.get("artist_name"), track.get("track_name"))
+
+                lyrics = self.get_lyrics(track_id)
+
+                if lyrics:
+                    logger.debug("Lyrics Found.")
+                    return lyrics
+        else:
+            logger.debug("No Musixmatch results found.")
+
+        logger.debug("Trying fallback providers...")
+
+        for fallback in (
+            self.fetch_from_lrclib,
+            self.fetch_from_lyrics_ovh,
+            self.fetch_from_vocaloid_wiki,
+        ):
+            try:
+                lyrics = fallback(artist, title)
+
+                if lyrics:
+                    logger.debug("Lyrics found from fallback: %s", fallback.__name__)
+                    return lyrics
+
+            except Exception as e:
+                logger.warning("Fallback failed (%s): %s", fallback.__name__, e)
+
+        logger.debug("No lyrics found.")
+        return None
+
+    def search_track(self, artist, title):
+        url = "https://apic-desktop.musixmatch.com/ws/1.1/track.search"
+
+        params = {
+            "q_artist": artist,
+            "q_track": title,
+            "page_size": 5,
+            "s_track_rating": "desc",
+            "app_id": "web-desktop-app-v1.0",
+            "usertoken": self.MUSIXMATCH_USER_TOKEN,
+        }
+
+        data = self._get_json(url, params=params, headers=self.SEARCH_HEADERS)
+
+        if not isinstance(data, dict):
+            return []
+
+        message = data.get("message")
+        if not isinstance(message, dict):
+            return []
+
+        body = message.get("body")
+        if not isinstance(body, dict):
+            return []
+
+        track_list = body.get("track_list")
+        if isinstance(track_list, list):
+            return track_list
+
+        return []
+
+    def get_lyrics(self, track_id):
+        endpoints = [
+            ("track.subtitle.get", "subtitle", "subtitle_body", {"subtitle_format": "lrc"}),
+            ("track.lyrics.get", "lyrics", "lyrics_body", {}),
+        ]
+
+        for endpoint_name, body_key, text_key, extra_params in endpoints:
+            url = f"https://apic-desktop.musixmatch.com/ws/1.1/{endpoint_name}"
+
+            params = {
+                "track_id": track_id,
+                "app_id": "web-desktop-app-v1.0",
+                "usertoken": self.MUSIXMATCH_USER_TOKEN,
+                **extra_params,
+            }
+
+            data = self._get_json(url, params=params, headers=self.LYRICS_HEADERS)
+
+            if not isinstance(data, dict):
+                continue
+
+            message = data.get("message")
+            if not isinstance(message, dict):
+                continue
+
+            header = message.get("header")
+            if not isinstance(header, dict):
+                header = {}
+
+            status_code = header.get("status_code")
+            if status_code != 200:
+                logger.debug("%s failed. Status: %s", endpoint_name, status_code)
+                continue
+
+            body = message.get("body")
+            if not isinstance(body, dict):
+                logger.debug("%s returned non-dict body: %r", endpoint_name, body)
+                continue
+
+            lyrics_obj = body.get(body_key)
+            if not isinstance(lyrics_obj, dict):
+                logger.debug("%s returned non-dict %s: %r", endpoint_name, body_key, lyrics_obj)
+                continue
+
+            lyrics = lyrics_obj.get(text_key)
+            if isinstance(lyrics, str) and lyrics.strip():
+                return lyrics.split("*******")[0].strip()
+
+        return None
+
+    def clean_wiki_text(self, text: str):
+        text = re.sub(r"\{\{[^{}]*\}\}", "", text)
+        text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)
+        text = re.sub(r"==+.*?==+", "", text)
+        return text.strip()
+
+    def fetch_from_lrclib(self, artist, title):
+        logger.debug("Trying LRCLIB...")
+        url = "https://lrclib.net/api/search"
+
+        params = {
+            "artist_name": artist,
+            "track_name": title,
+        }
+
+        data = self._get_json(url, params=params)
+
+        if not isinstance(data, list) or not data:
+            return None
+
+        best = data[0]
+
+        synced = best.get("syncedLyrics")
+        plain = best.get("plainLyrics")
+
+        if isinstance(synced, str) and synced.strip():
+            logger.debug("Fallback success: LRCLIB synced")
+            return synced.strip()
+
+        if isinstance(plain, str) and plain.strip():
+            logger.debug("Fallback success: LRCLIB plain")
+            return plain.strip()
+
+        return None
+
+    def fetch_from_lyrics_ovh(self, artist, title):
+        logger.debug("Trying lyrics.ovh...")
+        url = f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}"
+
+        data = self._get_json(url)
+
+        if not isinstance(data, dict):
+            return None
+
+        lyrics = data.get("lyrics")
+
+        if isinstance(lyrics, str) and lyrics.strip():
+            logger.debug("Fallback success: lyrics.ovh")
+            return lyrics.strip()
+
+        return None
+
+    def fetch_from_vocaloid_wiki(self, artist, title):
+        logger.debug("Trying Vocaloid Wiki...")
+        url = "https://vocaloidlyrics.miraheze.org/w/api.php"
+
+        params = {
+            "action": "query",
+            "prop": "revisions",
+            "rvprop": "content",
+            "rvslots": "main",
+            "titles": title,
+            "format": "json",
+            "formatversion": 2,
+        }
+
+        data = self._get_json(url, params=params)
+
+        if not isinstance(data, dict):
+            return None
+
+        pages = data.get("query", {}).get("pages", [])
+
+        if not pages:
+            return None
+
+        page = pages[0]
+
+        if page.get("missing"):
+            return None
+
+        revisions = page.get("revisions")
+
+        if not revisions:
+            return None
+
+        text = revisions[0]["slots"]["main"]["content"]
+        text = self.clean_wiki_text(text)
+
+        if len(text) > 50:
+            logger.debug("Fallback success: Vocaloid Wiki")
+            return text.strip()
+
+        return None
 
 LF_FACESIZE = 32
 STD_OUTPUT_HANDLE = -11
@@ -420,10 +702,12 @@ class Preset:
     floating_lyrics_on_top: bool = False
     romaji: bool = False
     translated: bool = False
-    queue: list[int] | None = None
     library_sort_mode: int = 0
     library_show_images: bool = False
     normalize_audio: bool = True
+    online_lyrics: bool = True
+    MUSIXMATCH_USER_TOKEN: str = ''
+    queue: list[int] | None = None
 
 
 
@@ -712,6 +996,7 @@ class LyricStuff(QObject):
         self.floating_window = None
         self.translation_cache = {}
         self.KAKASI_IMPORT = KAKASI_IMPORTED
+        self.LyricsFetcher = LyricsFetcher(self)
 
     def show_window(self):
         if self.window is None:
@@ -978,10 +1263,26 @@ class LyricStuff(QObject):
         lyric_path = self.get_lyrics()
 
         if not lyric_path:
-            return {
-                "timed": False,
-                "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
-            }
+            try:
+                if self.engine.preset.online_lyrics:
+                    logger.debug("Using LyricsFetcher for %s - %s", artist, title)
+                    lyrics = self.LyricsFetcher.fetch(artist, title)
+                    if not lyrics:
+                        return {
+                            "timed": False,
+                            "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
+                        }
+                else:
+                    return {
+                        "timed": False,
+                        "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
+                    }
+            except Exception as e:
+                logger.warning("Failed to get lyrics: %s", e)
+                return {
+                    "timed": False,
+                    "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
+                }
 
         with open(lyric_path, "r", encoding="utf-8") as f:
             lyrics = f.read()
@@ -1214,6 +1515,7 @@ class Audio(QObject):
         self._loudness_cache = {}
         self.target_lufs = -14.0
         self.normalize_audio = self.preset.normalize_audio
+        self.online_lyrics = self.preset.online_lyrics
         self.queue_auto_enabled = True
 
         self._session = self.audio_player.playback_session
@@ -2077,6 +2379,8 @@ class Player(QWidget):
         self.settings_translated_cb = QCheckBox("Translation")
         
         self.settings_normalize_audio_cb = QCheckBox("Normalize Audio")
+        self.settings_online_lyrics_cb = QCheckBox("Online Lyrics")
+        self.settings_MUSIXMATCH_USER_TOKEN_text = QLineEdit("Paste your MUSIXMATCH user token here")
 
         self.volume_slider = JumpSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
@@ -2379,6 +2683,19 @@ class Player(QWidget):
 
 
         settings_lyrics_group = QGroupBox("Lyrics Settings")
+        settings_lyrics_layout = QVBoxLayout(settings_lyrics_group)
+
+        settings_lyrics_layout_1 = QHBoxLayout()
+        settings_lyrics_layout_1.addWidget(self.settings_online_lyrics_cb)
+        settings_lyrics_layout_1.addStretch()
+
+        settings_lyrics_layout_2 = QHBoxLayout()
+        settings_lyrics_layout_2.addWidget(self.settings_MUSIXMATCH_USER_TOKEN_text)
+        settings_lyrics_layout_2.addStretch()
+
+        settings_lyrics_layout.addLayout(settings_lyrics_layout_1)
+        settings_lyrics_layout.addLayout(settings_lyrics_layout_2)
+
         # font, size, color, hold time,
 
         # =========================
@@ -2586,6 +2903,11 @@ class Player(QWidget):
         self.settings_translated_cb.setChecked(self.engine.preset.translated)
         self.settings_normalize_audio_cb.setChecked(self.engine.preset.normalize_audio)
         self.settings_normalize_audio_cb.stateChanged.connect(self._apply_ui_to_engine)
+        # Lyrics
+        self.settings_online_lyrics_cb.setChecked(self.engine.preset.online_lyrics)
+        self.settings_online_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.settings_MUSIXMATCH_USER_TOKEN_text.setText(self.engine.preset.MUSIXMATCH_USER_TOKEN)
+        self.settings_MUSIXMATCH_USER_TOKEN_text.textChanged.connect(self._apply_ui_to_engine)
         # Library
         self.library_sort_drop.currentIndexChanged.connect(self._library_settings_changed)
         self.library_images_cb.stateChanged.connect(self._library_settings_changed)
@@ -3900,6 +4222,9 @@ class Player(QWidget):
                 self.settings_repeat_cb,
                 self.settings_normalize_audio_cb,
 
+                self.settings_online_lyrics_cb,
+                self.settings_MUSIXMATCH_USER_TOKEN_text,
+
                 self.volume_slider,
                 self.show_console_cb,
                 self.logging_level_drop,
@@ -3937,6 +4262,8 @@ class Player(QWidget):
             self.library_sort_drop.setCurrentIndex(p.library_sort_mode)
             self.library_images_cb.setChecked(bool(p.library_show_images))
             self.settings_normalize_audio_cb.setChecked(bool(p.normalize_audio))
+            self.settings_online_lyrics_cb.setChecked(bool(p.online_lyrics))
+            self.settings_MUSIXMATCH_USER_TOKEN_text.setText(str(p.MUSIXMATCH_USER_TOKEN))
 
             for widget in widgets_to_block:
                 widget.blockSignals(False)
@@ -3963,8 +4290,13 @@ class Player(QWidget):
             if p.floating_lyrics:
                 self.engine.lyrics.show_floating_window()
                 self.engine.lyrics.set_floating_on_top(p.floating_lyrics_on_top)
+
+            self.engine.online_lyrics = p.online_lyrics
+            self.engine.preset.online_lyrics = p.online_lyrics
             self.engine.preset.normalize_audio = p.normalize_audio
             self.engine.normalize_audio = p.normalize_audio
+
+            self.engine.lyrics.MUSIXMATCH_USER_TOKEN = p.MUSIXMATCH_USER_TOKEN
             self._library_settings_changed()
             self._fill_queue()
 
@@ -3994,7 +4326,10 @@ class Player(QWidget):
         p.translated = self.translated_cb.isChecked()
         p.queue = list(self.engine.queue)
         p.normalize_audio = self.settings_normalize_audio_cb.isChecked()
+        p.online_lyrics = self.settings_online_lyrics_cb.isChecked()
+        p.MUSIXMATCH_USER_TOKEN = self.settings_MUSIXMATCH_USER_TOKEN_text.text()
 
+        self.engine.online_lyrics = p.online_lyrics
         self.engine.normalize_audio = p.normalize_audio
         self.engine.set_shuffle(p.shuffle)
         self.engine.set_repeat(p.repeat)
