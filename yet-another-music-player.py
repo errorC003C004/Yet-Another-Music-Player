@@ -28,6 +28,7 @@ Every time I worked on it
   5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
   5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
   5-26-26 06:16 PM === bug fixes, Added Draggable Tabs, Emoji Logs fixed
+  + Queue Slots Draggable, Smooth Scrolling
 
 Known Issues:
     * None
@@ -48,7 +49,6 @@ Future Features:
     * Option to also save song current position/time
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
     * Youtube Imbedded Support
-    * Queue Slots Draggable
 
 '''
 ARGOS_AVAILABLE = None
@@ -66,8 +66,8 @@ from winrt.windows.storage import StorageFile
 from winrt.windows.storage.streams import RandomAccessStreamReference
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QInputDialog, QGridLayout, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QFrame, QInputDialog, QStyledItemDelegate, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -84,11 +84,6 @@ from datetime import timedelta
 import re
 import hashlib
 import logging
-import html
-
-
-from dotenv import load_dotenv
-load_dotenv()
 
 LIB_AND_PYLN_IMPORTED = False
 KAKASI_IMPORTED = False
@@ -221,6 +216,34 @@ def get_argos_translate():
         logger.debug("🟣🟡 Argos unavailable: %s", e)
         return None
 
+def smooth_wheel_scroll(widget, event, duration=180):
+    sb = widget.verticalScrollBar()
+
+    pixel_delta = event.pixelDelta().y()
+    angle_delta = event.angleDelta().y()
+
+    if pixel_delta:
+        amount = pixel_delta
+    elif angle_delta:
+        steps = angle_delta / 120
+        amount = steps * QApplication.wheelScrollLines() * sb.singleStep()
+    else:
+        return
+
+    target = sb.value() - int(amount)
+    target = max(sb.minimum(), min(sb.maximum(), target))
+
+    anim = QPropertyAnimation(sb, b"value", widget)
+    anim.setDuration(duration)
+    anim.setStartValue(sb.value())
+    anim.setEndValue(target)
+    anim.setEasingCurve(QEasingCurve.OutCubic)
+
+    widget._smooth_scroll_anim = anim
+    anim.start()
+
+    event.accept()
+
 class ConsoleCloseBridge(QObject):
     closed = Signal()
 console_close_bridge = ConsoleCloseBridge()
@@ -228,6 +251,13 @@ console_close_bridge = ConsoleCloseBridge()
 class LibraryListWidget(QListWidget):
     deletePressed = Signal()
     selectAllPressed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+
+    def wheelEvent(self, event):
+        smooth_wheel_scroll(self, event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete:
@@ -250,10 +280,10 @@ class JumpSlider(QSlider):
                 int(event.position().x()),
                 self.width()
             )
+
             self.setValue(value)
+            self.sliderPressed.emit()
             self.sliderMoved.emit(value)
-            event.accept()
-            return
 
         super().mousePressEvent(event)
 
@@ -300,100 +330,6 @@ class LyricsWorker(QObject):
 class LyricsResultBridge(QObject):
     loaded = Signal(dict, int, str)
     failed = Signal(str, int, str)
-
-
-class ThemeThing(QObject):
-    def __init__(self, player):
-        super().__init__()
-        self.player = player
-        self.current_theme = DEFAULT_THEME.copy()
-
-    def refresh_current_theme(self):
-        if not hasattr(self.player, "current_theme") or self.player.current_theme is None:
-            self.player.current_theme = DEFAULT_THEME.copy()
-
-        self.current_theme = self.player.current_theme
-        return self.current_theme
-
-    def change_bg_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "bg", color.name())
-
-    def change_text_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "text", color.name())
-
-    def change_muted_text_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "muted_text", color.name())
-
-    def change_panel_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "panel", color.name())
-
-    def change_panel_active_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "panel_active", color.name())
-
-    def change_border_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border", color.name())
-
-    def change_border_hover_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border_hover", color.name())
-
-    def change_border_selected_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border_selected", color.name())
-
-    def change_border_disabled_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border_disabled", color.name())
-
-    def change_button_hover_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "button_hover", color.name())
-
-    def change_button_pressed_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "button_pressed", color.name())
-
-    def change_accent_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "accent", color.name())
-
-    def change_accent_hover_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "accent_hover", color.name())
-
-    def change_selection_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "selection", color.name())
-
-    def change_slider_bg_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "slider_bg", color.name())
-
-    def change_disabled_text_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "disabled_text", color.name())
 
 class LyricsFetcher(QObject):
     def __init__(self, LyricStuff):
@@ -670,6 +606,232 @@ class LyricsFetcher(QObject):
         logger.debug("Fallback failed: Vocaloid Wiki")
         return None
 
+
+class ThemeThing(QObject):
+    def __init__(self, player):
+        super().__init__()
+        self.player = player
+        self.current_theme = DEFAULT_THEME.copy()
+
+    def refresh_current_theme(self):
+        if not hasattr(self.player, "current_theme") or self.player.current_theme is None:
+            self.player.current_theme = DEFAULT_THEME.copy()
+
+        self.current_theme = self.player.current_theme
+        return self.current_theme
+
+    def change_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "bg", color.name())
+
+    def change_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "text", color.name())
+
+    def change_muted_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "muted_text", color.name())
+
+    def change_panel_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "panel", color.name())
+
+    def change_panel_active_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "panel_active", color.name())
+
+    def change_border_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border", color.name())
+
+    def change_border_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_hover", color.name())
+
+    def change_border_selected_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_selected", color.name())
+
+    def change_border_disabled_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_disabled", color.name())
+
+    def change_button_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "button_hover", color.name())
+
+    def change_button_pressed_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "button_pressed", color.name())
+
+    def change_accent_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "accent", color.name())
+
+    def change_accent_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "accent_hover", color.name())
+
+    def change_selection_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "selection", color.name())
+
+    def change_slider_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "slider_bg", color.name())
+
+    def change_disabled_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "disabled_text", color.name())
+
+
+class QueueRowWidget(QWidget):
+    def __init__(self, text: str, pixmap: QPixmap | None = None):
+        super().__init__()
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+
+        cover = QLabel()
+        cover.setFixedSize(48, 48)
+        cover.setScaledContents(False)
+
+        if pixmap and not pixmap.isNull():
+            cover.setPixmap(
+                pixmap.scaled(
+                    52, 52,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+            )
+
+        layout.addWidget(cover)
+
+        title = QLabel(text)
+        title.setStyleSheet("background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        layout.addWidget(title, 1)
+
+        handle = QLabel("☰")
+        handle.setFixedSize(28, 48)
+        handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        handle.setCursor(Qt.CursorShape.OpenHandCursor)
+        handle.setStyleSheet("background: transparent; font-size: 18px;")
+
+        layout.addWidget(handle)
+
+class QueueListWidget(QListWidget):
+    deletePressed = Signal()
+    selectAllPressed = Signal()
+
+    HANDLE_WIDTH = 40
+
+    def __init__(self, player):
+        super().__init__()
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.player = player
+        self._drag_allowed = False
+
+        self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+
+    def wheelEvent(self, event):
+        smooth_wheel_scroll(self, event)
+
+    def mousePressEvent(self, event):
+        self._drag_allowed = (
+            event.position().x() >= self.viewport().width() - self.HANDLE_WIDTH
+        )
+
+        super().mousePressEvent(event)
+
+    def startDrag(self, supportedActions):
+        if not self._drag_allowed:
+            return
+
+        super().startDrag(supportedActions)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self.deletePressed.emit()
+            return
+
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            self.selectAll()
+            self.selectAllPressed.emit()
+            return
+
+        super().keyPressEvent(event)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        self.save_queue_order()
+
+    def save_queue_order(self):
+        new_queue = []
+
+        for i in range(self.count()):
+            item = self.item(i)
+            song_index = item.data(Qt.UserRole)
+
+            if song_index is not None:
+                new_queue.append(int(song_index))
+
+        self.player.engine.queue = new_queue
+        self.player.engine.preset.queue = list(new_queue)
+        self.player._autosave_current_preset()
+
+class QueueItemDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+
+        painter.save()
+
+        rect = option.rect
+
+        painter.setPen(option.palette.text().color())
+
+        font = painter.font()
+        font.setPointSize(14)
+        painter.setFont(font)
+
+        handle_rect = QRect(
+            rect.right() - 34,
+            rect.top(),
+            28,
+            rect.height()
+        )
+
+        painter.drawText(
+            handle_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "☰"
+        )
+
+        painter.restore()
+
 LF_FACESIZE = 32
 STD_OUTPUT_HANDLE = -11
 
@@ -720,6 +882,7 @@ class Preset:
 class LyricsPopupWindow(QWidget):
     geometryChanged = Signal()
     closedByUser = Signal()
+
     def __init__(self, title="Lyrics", minimum_size=(420, 120), show_all=False):
         super().__init__()
 
@@ -729,12 +892,13 @@ class LyricsPopupWindow(QWidget):
         self.setMinimumSize(*minimum_size)
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setMouseTracking(True) 
+        self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
         self._drag_ready = False
         self._dragging = False
         self._drag_offset = QPoint()
+        self._last_lyrics_count = -1
 
         self._hover_timer = QTimer(self)
         self._hover_timer.setSingleShot(True)
@@ -752,21 +916,50 @@ class LyricsPopupWindow(QWidget):
         box_layout = QVBoxLayout(self.box)
         box_layout.setContentsMargins(16, 12, 16, 12)
 
-        self.label = QLabel("")
-        self.label.setObjectName("FloatingLyricsText")
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setWordWrap(True)
-        self.label.setMouseTracking(True)
-        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if self.show_all:
+            self.lyrics_list = QListWidget()
+            self.lyrics_list.setFrameShape(QFrame.Shape.NoFrame)
+            self.lyrics_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            self.lyrics_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.lyrics_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.lyrics_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+            self.lyrics_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.lyrics_list.setMouseTracking(True)
+            self.lyrics_list.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.lyrics_list.setStyleSheet("""
+                QListWidget {
+                    background: transparent;
+                    border: none;
+                    outline: none;
+                }
+                QListWidget::item {
+                    background: transparent;
+                    border: none;
+                    padding: 5px;
+                }
+            """)
+            box_layout.addWidget(self.lyrics_list)
+            self.label = None
+        else:
+            self.label = QLabel("")
+            self.label.setObjectName("FloatingLyricsText")
+            self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.label.setWordWrap(True)
+            self.label.setMouseTracking(True)
+            self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        box_layout.addWidget(self.label)
+            box_layout.addWidget(self.label)
+            self.lyrics_list = None
+
         layout.addWidget(self.box)
 
         self._set_idle_style()
 
     def set_text(self, text: str):
+        if self.label is None:
+            return
+
         self.label.setTextFormat(Qt.TextFormat.PlainText)
-        self.label.setText(text or "")
 
         if self.contains_japanese(text):
             self.label.setStyleSheet("""
@@ -783,7 +976,7 @@ class LyricsPopupWindow(QWidget):
                 font-weight: 700;
             """)
 
-        self.label.setText(text)
+        self.label.setText(text or "")
 
     def set_lyrics(self, lyrics_data: list, current_index: int = -1, highlight: bool = True):
         if not self.show_all:
@@ -797,62 +990,94 @@ class LyricsPopupWindow(QWidget):
                 self.set_text("")
             return
 
-        self.label.setTextFormat(Qt.TextFormat.RichText)
+        if self.lyrics_list is None:
+            return
 
-        max_lines = 15
         total = len(lyrics_data)
 
         if total == 0:
-            self.label.setText("")
+            self.lyrics_list.clear()
+            self._last_lyrics_count = 0
             return
 
-        if current_index < 0:
-            current_index = 0
-        elif current_index >= total:
-            current_index = total - 1
+        current_index = max(0, min(total - 1, current_index))
 
-        half = max_lines // 2
-        start = max(0, current_index - half)
-        end = min(total, start + max_lines)
+        if self.lyrics_list.count() != total:
+            self.lyrics_list.clear()
 
-        if end - start < max_lines:
-            start = max(0, end - max_lines)
+            for line in lyrics_data:
+                text = str(line.get("text", ""))
+                if not text.strip():
+                    text = "♫"
 
-        lines = []
+                item = QListWidgetItem(text)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.lyrics_list.addItem(item)
 
-        for i in range(start, end):
-            text = lyrics_data[i].get("text", "")
-            text = html.escape(str(text))
+            self._last_lyrics_count = total
 
-            if not text.strip():
-                text = "♫"
-            font = self.theme_font("lyrics_jp_font", "Noto Sans JP") if self.contains_japanese(text) else self.theme_font("lyrics_en_font", "Segoe UI Variable")
-            if highlight and i == current_index:
-                lines.append(
-                    f'<div style="font-family:{font}; '
-                    f'font-size:22px; font-weight:700; '
-                    f'color:white; margin:8px 0;">{text}</div>'
-                )
-            else:
-                lines.append(
-                    f'<div style="font-family:{font}; '
-                    f'font-size:16px; font-weight:500; '
-                    f'color:rgba(255,255,255,120); margin:5px 0;">{text}</div>'
-                )
+        for i in range(self.lyrics_list.count()):
+            item = self.lyrics_list.item(i)
+            if item is None:
+                continue
 
-        self.label.setText("".join(lines))
+            active = highlight and i == current_index
+
+            text = item.text()
+            font = item.font()
+            font.setFamily(
+                self.theme_font_raw("lyrics_jp_font", "Noto Sans JP")
+                if self.contains_japanese(text)
+                else self.theme_font_raw("lyrics_en_font", "Segoe UI Variable")
+            )
+            font.setBold(active)
+            font.setPointSize(18 if active else 13)
+            item.setFont(font)
+
+            item.setForeground(Qt.GlobalColor.white if active else Qt.GlobalColor.gray)
+            item.setBackground(Qt.GlobalColor.transparent)
+
+        item = self.lyrics_list.item(current_index)
+        if item is not None:
+            self.smooth_scroll_to_item(item)
+
+    def smooth_scroll_to_item(self, item, duration=260):
+        if not self.show_all or self.lyrics_list is None or item is None:
+            return
+
+        sb = self.lyrics_list.verticalScrollBar()
+        rect = self.lyrics_list.visualItemRect(item)
+
+        target = sb.value() + rect.top()
+        target -= self.lyrics_list.viewport().height() // 2
+        target += rect.height() // 2
+
+        target = max(sb.minimum(), min(sb.maximum(), target))
+
+        if target == sb.value():
+            return
+
+        anim = QPropertyAnimation(sb, b"value", self.lyrics_list)
+        anim.setDuration(duration)
+        anim.setStartValue(sb.value())
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self.lyrics_list._smooth_scroll_anim = anim
+        anim.start()
 
     def theme_font(self, name: str, default: str) -> str:
+        return f"'{self.theme_font_raw(name, default)}'"
+
+    def theme_font_raw(self, name: str, default: str) -> str:
         try:
             with open(PRESET_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             theme = data.get("theme", {})
-            value = theme.get(name, default)
-
-            return f"'{value}'"
+            return theme.get(name, default)
         except Exception:
-            return f"'{default}'"
+            return default
 
     def _apply_style(self, alpha):
         self.box.setStyleSheet(f"""
@@ -881,8 +1106,15 @@ class LyricsPopupWindow(QWidget):
         self.setCursor(Qt.CursorShape.SizeAllCursor)
 
     def _mouse_over_label(self, global_pos) -> bool:
-        label_pos = self.label.mapFromGlobal(global_pos)
-        return self.label.rect().contains(label_pos)
+        if self.label is not None:
+            label_pos = self.label.mapFromGlobal(global_pos)
+            return self.label.rect().contains(label_pos)
+
+        if self.lyrics_list is not None:
+            list_pos = self.lyrics_list.mapFromGlobal(global_pos)
+            return self.lyrics_list.rect().contains(list_pos)
+
+        return False
 
     def enterEvent(self, event):
         global_pos = self.cursor().pos()
@@ -912,6 +1144,7 @@ class LyricsPopupWindow(QWidget):
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
             return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -942,6 +1175,7 @@ class LyricsPopupWindow(QWidget):
     def wheelEvent(self, event):
         if not self._drag_ready:
             return
+
         if not hasattr(self, "_scroll_callback") or self._scroll_callback is None:
             return
 
@@ -952,6 +1186,7 @@ class LyricsPopupWindow(QWidget):
 
         direction = 1 if delta < 0 else -1
         self._scroll_callback(direction)
+        event.accept()
 
     def set_scroll_callback(self, callback):
         self._scroll_callback = callback
@@ -961,9 +1196,9 @@ class LyricsPopupWindow(QWidget):
             code = ord(ch)
 
             if (
-                0x3040 <= code <= 0x309F or  # Hiragana
-                0x30A0 <= code <= 0x30FF or  # Katakana
-                0x4E00 <= code <= 0x9FFF     # Kanji
+                0x3040 <= code <= 0x309F or
+                0x30A0 <= code <= 0x30FF or
+                0x4E00 <= code <= 0x9FFF
             ):
                 return True
 
@@ -2102,8 +2337,8 @@ class Audio(QObject):
             if leaving_index not in self.queue:
                 self.queue.insert(0, leaving_index)
 
-            if len(self.queue) > 15:
-                self.queue = self.queue[:15]
+            if len(self.queue) > self.player.QUEUE_LIMIT:
+                self.queue = self.queue[:self.player.QUEUE_LIMIT]
 
             if hasattr(self.player, "_fill_queue"):
                 try:
@@ -2552,9 +2787,10 @@ class Player(QWidget):
         queue_group = QGroupBox("Queue")
         queue_group_layout = QVBoxLayout(queue_group)
 
-        self.queue_list = LibraryListWidget()
+        self.queue_list = QueueListWidget(self)
         self.queue_list.setObjectName("QueueList")
         self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.queue_list.setItemDelegate(QueueItemDelegate())
 
         queue_buttons = QHBoxLayout()
         self.add_to_queue_btn = QPushButton("Refresh Queue")
@@ -2937,6 +3173,30 @@ class Player(QWidget):
 
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
+    def smooth_scroll_to_item(self, item, duration=220):
+        if item is None:
+            return
+
+        list_widget = self.lyrics_list
+
+        sb = list_widget.verticalScrollBar()
+        rect = list_widget.visualItemRect(item)
+
+        target = sb.value() + rect.top()
+        target -= list_widget.viewport().height() // 2
+        target += rect.height() // 2
+
+        target = max(sb.minimum(), min(sb.maximum(), target))
+
+        anim = QPropertyAnimation(sb, b"value", list_widget)
+        anim.setDuration(duration)
+        anim.setStartValue(sb.value())
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        list_widget._smooth_scroll_anim = anim
+        anim.start()
+
     def _tabs_moved(self, from_index: int, to_index: int):
         self.engine.preset.tab_order = [
             self.tabs.tabText(i)
@@ -3042,7 +3302,7 @@ class Player(QWidget):
             item.setData(Qt.UserRole, index)
 
             if self.engine.preset.library_show_images:
-                item.setSizeHint(QSize(260, 68))
+                item.setSizeHint(QSize(260, 60))
 
                 icon_path = BLANK_PATH
 
@@ -3112,14 +3372,14 @@ class Player(QWidget):
         if not songs:
             return
 
-        QUEUE_LIMIT = 15
+        self.QUEUE_LIMIT = 80
 
         all_indexes = list(range(len(songs)))
 
         blocked = set(self.engine.queue)
         blocked.add(self.current_song)
 
-        needed = QUEUE_LIMIT - len(self.engine.queue)
+        needed = self.QUEUE_LIMIT - len(self.engine.queue)
         if needed <= 0:
             return
 
@@ -3190,17 +3450,15 @@ class Player(QWidget):
             return
 
         self.queue_list.clear()
+        self.queue_list.setIconSize(QSize(52, 52))
 
-        for pos, index in enumerate(self.engine.queue, start=1):
+        for index in self.engine.queue:
             data = self.songs.get(str(index))
             path = data.get("path") if data else None
 
             item = QListWidgetItem(f"{self._queue_song_name(index)}")
             item.setData(Qt.UserRole, index)
             item.setSizeHint(QSize(260, 68))
-
-            data = self.songs.get(str(index))
-            path = data.get("path") if data else None
 
             icon_path = BLANK_PATH
 
@@ -3211,7 +3469,6 @@ class Player(QWidget):
                 except Exception:
                     icon_path = BLANK_PATH
 
-            self.queue_list.setIconSize(QSize(52, 52))
             item.setIcon(QIcon(icon_path))
             self.queue_list.addItem(item)
 
@@ -3446,7 +3703,7 @@ class Player(QWidget):
 
         item = self.lyrics_list.item(index)
         if item is not None:
-            self.lyrics_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            self.smooth_scroll_to_item(item)
 
         self.engine.lyrics.update_window(self.current_lyrics_data, index, False)
 
@@ -3793,8 +4050,7 @@ class Player(QWidget):
 
         if 0 <= index < self.lyrics_list.count():
             item = self.lyrics_list.item(index)
-            if item is not None:
-                self.lyrics_list.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            self.smooth_scroll_to_item(item)
 
         self.engine.lyrics.update_window(self.current_lyrics_data, index, True)
         self.engine.lyrics.update_floating_window(self.current_lyrics_data, index)
@@ -4187,9 +4443,16 @@ class Player(QWidget):
         self._dragging_position = True
 
     def _position_slider_released(self):
+        value = self.position_slider.value()
+        self.engine.set_time(value)
+
         self._dragging_position = False
-        self.engine.set_time(self.position_slider.value())
-        self._update_position_slider()
+
+        self.time_label.setText(
+            f"{self._format_time(value)} / {self._format_time(self.position_slider.maximum())}"
+        )
+
+        QTimer.singleShot(300, self._update_position_slider)
 
     def _get_current_song_name(self):
         artist, title, cover_path = self.engine.get_data()
