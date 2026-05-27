@@ -27,6 +27,7 @@ Every time I worked on it
   1.1.1
   5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
   5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
+  5-26-26 06:16 PM === bug fixes, Added Draggable Tabs, Emoji Logs fixed
 
 Known Issues:
     * None
@@ -38,15 +39,15 @@ Fixed Issues (last reset, 5-11-26 9:18 PM):
 
 Added Features (last reset, 5-11-26 9:18 PM):
     * Queue
+    * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
     * Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
+    * Tabs Draggable and Order saved
 
 Future Features:
     * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
     * Option to also save song current position/time
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
-    * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
     * Youtube Imbedded Support
-    * Tabs Draggable and saved
     * Queue Slots Draggable
 
 '''
@@ -160,14 +161,14 @@ if not os.path.exists(BLANK_PATH):
             with open(BLANK_PATH, "wb") as f:
                 f.write(r.read())
     except Exception as e:
-        logger.warning("Cant Download Blank Image: %s", e)
+        logger.warning("🟡 Cant Download Blank Image: %s", e)
 if not os.path.exists(ICON_PATH):
     try:
         with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/icon.png?raw=true", timeout=10) as r:
             with open(ICON_PATH, "wb") as f:
                 f.write(r.read())
     except Exception as e:
-        logger.warning("Cant Download Icon Image: %s", e)
+        logger.warning("🟡 Cant Download Icon Image: %s", e)
 
 if getattr(sys, 'frozen', False):
     runningpy = False
@@ -198,7 +199,7 @@ def _load_auto_preset(w) -> None:
             data = json.load(f)
         w._apply_preset_to_ui(data)
     except Exception as e:
-        logger.warning("Auto-load failed: %s", e)
+        logger.warning("🟡 Auto-load failed: %s", e)
 
 def get_argos_translate():
     global ARGOS_AVAILABLE, argos_import_error, _argos_translate
@@ -217,7 +218,7 @@ def get_argos_translate():
     except Exception as e:
         argos_import_error = e
         ARGOS_AVAILABLE = False
-        logger.warning("Argos unavailable: %s", e)
+        logger.debug("🟣🟡 Argos unavailable: %s", e)
         return None
 
 class ConsoleCloseBridge(QObject):
@@ -252,6 +253,7 @@ class JumpSlider(QSlider):
             self.setValue(value)
             self.sliderMoved.emit(value)
             event.accept()
+            return
 
         super().mousePressEvent(event)
 
@@ -436,7 +438,7 @@ class LyricsFetcher(QObject):
 
     def fetch(self, artist, title):
         logger.debug("Started Lyrics Fetch (%s - %s)", artist, title)
-        self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.MUSIXMATCH_USER_TOKEN
+        self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.engine.preset.MUSIXMATCH_USER_TOKEN
 
         tracks = self.search_track(artist, title)
 
@@ -464,7 +466,7 @@ class LyricsFetcher(QObject):
                 lyrics = self.get_lyrics(track_id)
 
                 if lyrics:
-                    logger.debug("Lyrics Found.")
+                    logger.debug("🟣 Lyrics found")
                     return lyrics
         else:
             logger.debug("No Musixmatch results found.")
@@ -484,7 +486,7 @@ class LyricsFetcher(QObject):
                     return lyrics
 
             except Exception as e:
-                logger.warning("Fallback failed (%s): %s", fallback.__name__, e)
+                logger.warning("🟡 Fallback failed (%s): %s", fallback.__name__, e)
 
         logger.debug("No lyrics found.")
         return None
@@ -603,6 +605,7 @@ class LyricsFetcher(QObject):
             logger.debug("Fallback success: LRCLIB plain")
             return plain.strip()
 
+        logger.debug("Fallback failed: LRCLIB")
         return None
 
     def fetch_from_lyrics_ovh(self, artist, title):
@@ -620,6 +623,7 @@ class LyricsFetcher(QObject):
             logger.debug("Fallback success: lyrics.ovh")
             return lyrics.strip()
 
+        logger.debug("Fallback failed: lyrics.ovh")
         return None
 
     def fetch_from_vocaloid_wiki(self, artist, title):
@@ -663,6 +667,7 @@ class LyricsFetcher(QObject):
             logger.debug("Fallback success: Vocaloid Wiki")
             return text.strip()
 
+        logger.debug("Fallback failed: Vocaloid Wiki")
         return None
 
 LF_FACESIZE = 32
@@ -708,6 +713,7 @@ class Preset:
     online_lyrics: bool = True
     MUSIXMATCH_USER_TOKEN: str = ''
     queue: list[int] | None = None
+    tab_order: list[str] | None = None
 
 
 
@@ -1137,7 +1143,7 @@ class LyricStuff(QObject):
         argos_translate = get_argos_translate()
 
         if argos_translate is None:
-            logger.warning("Argos unavailable: %s", argos_import_error)
+            logger.warning("🟡 Argos unavailable: %s", argos_import_error)
             return text
         cache_key = (target, text)
 
@@ -1193,19 +1199,19 @@ class LyricStuff(QObject):
                 )
 
                 if from_lang is None or to_lang is None:
-                    logger.warning("Translation pair unavailable: %s -> %s", source, target)
+                    logger.debug("🟣🟡 Translation pair unavailable: %s -> %s", source, target)
                     return None
 
                 translation = from_lang.get_translation(to_lang)
 
                 if translation is None:
-                    logger.warning("Translation pair unavailable: %s -> %s", source, target)
+                    logger.debug("🟣🟡 Translation pair unavailable: %s -> %s", source, target)
                     return None
 
                 translated = translation.translate(raw)
 
             except Exception as e:
-                logger.warning("Translation failed: %s", e)
+                logger.warning("🟡 Translation failed: %s", e)
                 return None
 
             translated = translated.strip()
@@ -1278,14 +1284,15 @@ class LyricStuff(QObject):
                         "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
                     }
             except Exception as e:
-                logger.warning("Failed to get lyrics: %s", e)
+                logger.warning("🟡 Failed to get lyrics: %s", e)
                 return {
                     "timed": False,
                     "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
                 }
 
-        with open(lyric_path, "r", encoding="utf-8") as f:
-            lyrics = f.read()
+        if lyric_path:
+            with open(lyric_path, "r", encoding="utf-8") as f:
+                lyrics = f.read()
 
         time_pattern = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]")
         timed = bool(time_pattern.search(lyrics))
@@ -1469,7 +1476,7 @@ class LyricStuff(QObject):
 
             window.setGeometry(QRect(x, y, w, h))
         except Exception as e:
-            logger.warning("Window geometry restore failed: %s", e)\
+            logger.warning("🟡 Window geometry restore failed: %s", e)
 
     def _save_window_geometry(self):
         preset = self.engine.preset
@@ -1576,7 +1583,7 @@ class Audio(QObject):
             self._update_smtc_playback_status()
 
         except Exception as e:
-            logger.warning("Qt playback-state apply failed: %s", e)
+            logger.warning("🟡 Qt playback-state apply failed: %s", e)
 
     def _apply_media_opened_on_qt_thread(self):
         if getattr(self, "_media_open_request_path", None) != self.get_current_song():
@@ -1601,7 +1608,7 @@ class Audio(QObject):
             self._update_smtc_playback_status()
 
         except Exception as e:
-            logger.warning("Qt media-opened apply failed: %s", e)
+            logger.warning("🟡 Qt media-opened apply failed: %s", e)
 
     def _configure_smtc(self):
         smtc = self._smtc
@@ -1617,7 +1624,7 @@ class Audio(QObject):
         try:
             self.smtcButtonPressedQt.emit(int(args.button))
         except Exception as e:
-            logger.warning("SMTC button event failed: %s", e)
+            logger.warning("🟡 SMTC button event failed: %s", e)
 
     def _handle_smtc_button_on_qt_thread(self, button_value: int):
         try:
@@ -1802,7 +1809,7 @@ class Audio(QObject):
             self._loudness_cache[path] = gain_db
 
             logger.info(
-                "Loudness: %.2f LUFS | Gain: %.2f dB | %s",
+                "🟣 Loudness: %.2f LUFS | Gain: %.2f dB | %s",
                 loudness,
                 gain_db,
                 os.path.basename(path)
@@ -1811,7 +1818,7 @@ class Audio(QObject):
             return gain_db
 
         except Exception as e:
-            logger.warning("Loudness normalization failed: %s", e)
+            logger.warning("🟡 Loudness normalization failed: %s", e)
             return 0.0
 
     def _path_to_uri(self, path: str) -> Uri:
@@ -1830,14 +1837,14 @@ class Audio(QObject):
                 return
 
             if not os.path.exists(song):
-                logger.warning("Song file missing: %s", song)
+                logger.warning("🟡 Song file missing: %s", song)
                 return
 
             if self.queue_auto_enabled and hasattr(self.player, "_fill_queue"):
                 try:
                     self.player._fill_queue()
                 except Exception as e:
-                    logger.warning("_fill_queue failed: %s", e)
+                    logger.warning("🟡 _fill_queue failed: %s", e)
 
             if not self.play_order:
                 self.play_order = [self.player.current_song]
@@ -1855,16 +1862,16 @@ class Audio(QObject):
                     self._media_open_request_path = song
                     self.player._reset_progress_ui()
                 except Exception as e:
-                    logger.warning("Media reload failed: %s", e)
+                    logger.warning("🟡 Media reload failed: %s", e)
                     return
 
             try:
                 self.audio_player.play()
             except Exception as e:
-                logger.warning("audio_player.play failed: %s", e)
+                logger.warning("🟡 audio_player.play failed: %s", e)
                 return
 
-            if self.normalize_audio:
+            if self.normalize_audio and not self._session.playback_state == MediaPlaybackState.PAUSED and not self._session.playback_state == MediaPlaybackState.PLAYING:
                 self.start_loudness_analysis(song)
 
             self.volume(self.preset.volume)
@@ -1873,7 +1880,7 @@ class Audio(QObject):
                 self.player._set_now_playing_info(artist, title)
                 self.player.setWindowTitle(f"Yet Another Music Player - {self.player._get_current_preset_name()} - {artist} - {title}")
             except Exception as e:
-                logger.warning("UI update failed: %s", e)
+                logger.warning("🟡 UI update failed: %s", e)
 
             try:
                 pixmap = QPixmap(cover_path)
@@ -1881,33 +1888,33 @@ class Audio(QObject):
                     self.player.label.setPixmap(pixmap)
                 self.player.cover_path = cover_path
             except Exception as e:
-                logger.warning("Cover update failed: %s", e)
+                logger.warning("🟡 Cover update failed: %s", e)
 
             try:
                 self.player._select_library_song_by_index(self.player.current_song)
             except Exception as e:
-                logger.warning("Library selection failed: %s", e)
+                logger.warning("🟡 Library selection failed: %s", e)
 
             if not must_reload:
                 try:
                     self._update_windows_popup(title, artist, cover_path)
                     self._update_smtc_playback_status()
                 except Exception as e:
-                    logger.warning("Popup/SMTC update failed: %s", e)
+                    logger.warning("🟡 Popup/SMTC update failed: %s", e)
 
             if self.preset.lyrics_window:
                 try:
                     self.lyrics.show_window()
                 except Exception as e:
-                    logger.warning("Lyrics window failed: %s", e)
+                    logger.warning("🟡 Lyrics window failed: %s", e)
             if self.preset.floating_lyrics:
                 try:
                     self.lyrics.show_floating_window()
                 except Exception as e:
-                    logger.warning("Floating lyrics failed: %s", e)
+                    logger.warning("🟡 Floating lyrics failed: %s", e)
 
         except Exception as e:
-            logger.exception("play crashed: %s", e)
+            logger.exception("💥 play crashed: %s", e)
 
     def stop(self):
         self.audio_player.pause()
@@ -1923,7 +1930,7 @@ class Audio(QObject):
         try:
             self._smtc.playback_status = MediaPlaybackStatus.CLOSED
         except Exception as e:
-            logger.warning("SMTC stop status failed: %s", e)
+            logger.warning("🟡 SMTC stop status failed: %s", e)
 
     def pause(self):
         try:
@@ -1932,7 +1939,7 @@ class Audio(QObject):
             if state == MediaPlaybackState.PLAYING:
                 self.audio_player.pause()
                 self.player.pause_btn.setText("Resume")
-                logger.debug("Paused")
+                logger.debug("🟣 Paused")
 
                 self.pause_timer.start(5_000)
 
@@ -1950,7 +1957,7 @@ class Audio(QObject):
                 logger.debug("Resumed")
 
         except Exception as e:
-            logger.warning("pause crashed: %s", e)
+            logger.warning("🟡 pause crashed: %s", e)
 
     def _pause_timer_finished(self):
         if self.preset.lyrics_window:
@@ -1985,7 +1992,7 @@ class Audio(QObject):
             self.audio_player.volume = max(0.0, min(final_volume, 1.0))
 
         except Exception as e:
-            logger.warning("volume crashed: %s", e)
+            logger.warning("🟡 volume crashed: %s", e)
 
     def next(self):
         try:
@@ -2149,7 +2156,7 @@ class Audio(QObject):
             current_time = self._seconds_from_timespan(self._session.position)
             return full_time, current_time
         except Exception as e:
-            logger.warning("get_time failed: %s", e)
+            logger.warning("🟡 get_time failed: %s", e)
             return 0, 0
 
     def set_time(self, seconds: float):
@@ -2158,7 +2165,7 @@ class Audio(QObject):
         try:
             self._session.position = timedelta(seconds=float(seconds))
         except Exception as e:
-            logger.warning("Seek failed: %s", e)
+            logger.warning("🟡 Seek failed: %s", e)
 
     def _commit_current_to_timeline(self, index: int):
         if self.play_order_pos < len(self.play_order) - 1:
@@ -2187,7 +2194,7 @@ class Audio(QObject):
             state = int(self._session.playback_state)
             self.playbackStateChanged.emit(state)
         except Exception as e:
-            logger.warning("Playback state event failed: %s", e)
+            logger.warning("🟡 Playback state event failed: %s", e)
 
     def _update_windows_popup(self, title, artist, cover_path):
         try:
@@ -2201,14 +2208,14 @@ class Audio(QObject):
                     import asyncio
                     updater.thumbnail = asyncio.run(self._create_thumbnail_ref(cover_path))
                 except Exception as e:
-                    logger.warning("Thumbnail load failed: %s", e)
+                    logger.warning("🟡 Thumbnail load failed: %s", e)
                     updater.thumbnail = None
             else:
                 updater.thumbnail = None
 
             updater.update()
         except Exception as e:
-            logger.warning("SMTC update failed: %s", e)
+            logger.warning("🟡 SMTC update failed: %s", e)
 
     def _update_smtc_playback_status(self):
         try:
@@ -2221,19 +2228,19 @@ class Audio(QObject):
             else:
                 self._smtc.playback_status = MediaPlaybackStatus.CLOSED
         except Exception as e:
-            logger.warning("SMTC playback status update failed: %s", e)
+            logger.warning("🟡 SMTC playback status update failed: %s", e)
 
     def _on_media_ended(self, sender, args):
         try:
             self.songEnded.emit()
         except Exception as e:
-            logger.warning("Media ended event failed: %s", e)
+            logger.warning("🟡 Media ended event failed: %s", e)
 
     def _on_media_failed(self, sender, args):
         try:
             self._smtc.playback_status = MediaPlaybackStatus.CLOSED
 
-            logger.info("Media failed to play")
+            logger.error("🔴 Media failed to play")
             logger.info("Current song: %s", self.get_current_song())
 
             for name in dir(args):
@@ -2247,13 +2254,13 @@ class Audio(QObject):
                     logger.warning(f"{name}: <error reading: {ex}>")
 
         except Exception as e:
-            logger.warning("Media failed event failed: %s", e)
+            logger.warning("🟡 Media failed event failed: %s", e)
 
     def _on_media_opened(self, sender, args):
         try:
             self.mediaOpenedQt.emit()
         except Exception as e:
-            logger.warning("Media opened event failed: %s", e)
+            logger.warning("🟡 Media opened event failed: %s", e)
 
     def _update_history_limit(self):
         songs = self.player.get_song_list()
@@ -2309,25 +2316,27 @@ class Player(QWidget):
         root.setSpacing(14)
 
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setMovable(True)
+        self.tabs.tabBar().tabMoved.connect(self._tabs_moved)
         root.addWidget(self.tabs)
 
-        properties_tab = QWidget()
-        properties_layout = QVBoxLayout(properties_tab)
+        self.properties_tab = QWidget()
+        properties_layout = QVBoxLayout(self.properties_tab)
         properties_layout.setContentsMargins(16, 16, 16, 16)
         properties_layout.setSpacing(14)
 
-        library_tab = QWidget()
-        library_tab_layout = QVBoxLayout(library_tab)
+        self.library_tab = QWidget()
+        library_tab_layout = QVBoxLayout(self.library_tab)
         library_tab_layout.setContentsMargins(16, 16, 16, 16)
         library_tab_layout.setSpacing(14)
 
-        lyrics_tab = QWidget()
-        lyrics_layout = QVBoxLayout(lyrics_tab)
+        self.lyrics_tab = QWidget()
+        lyrics_layout = QVBoxLayout(self.lyrics_tab)
         lyrics_layout.setContentsMargins(16, 16, 16, 16)
         lyrics_layout.setSpacing(14)
 
-        settings_tab = QWidget()
-        settings_root_layout = QVBoxLayout(settings_tab)
+        self.settings_tab = QWidget()
+        settings_root_layout = QVBoxLayout(self.settings_tab)
         settings_root_layout.setContentsMargins(0, 0, 0, 0)
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
@@ -2339,16 +2348,16 @@ class Player(QWidget):
         settings_scroll.setWidget(settings_container)
         settings_root_layout.addWidget(settings_scroll)
 
-        queue_tab = QWidget()
-        queue_layout = QVBoxLayout(queue_tab)
+        self.queue_tab = QWidget()
+        queue_layout = QVBoxLayout(self.queue_tab)
         queue_layout.setContentsMargins(16, 16, 16, 16)
         queue_layout.setSpacing(14)
 
-        self.tabs.addTab(properties_tab, "Player")
-        self.tabs.addTab(lyrics_tab, "Lyrics")
-        self.tabs.addTab(queue_tab, "Queue")
-        self.tabs.addTab(library_tab, "Library")
-        self.tabs.addTab(settings_tab, "Settings")
+        self.tabs.addTab(self.properties_tab, "Player")
+        self.tabs.addTab(self.lyrics_tab, "Lyrics")
+        self.tabs.addTab(self.queue_tab, "Queue")
+        self.tabs.addTab(self.library_tab, "Library")
+        self.tabs.addTab(self.settings_tab, "Settings")
 
         # =====================================================
         #                    SHARED WIDGETS
@@ -2700,9 +2709,18 @@ class Player(QWidget):
 
         # =========================
         # QUEUE SETTINGS
-        # =========================
+        # =========================738
 
         settings_queue_group = QGroupBox("Queue Settings")
+        settings_queue_layout = QVBoxLayout(settings_queue_group)
+
+        settings_queue_layout_1 = QHBoxLayout()
+        self.debug_btn = QPushButton("Debug")
+        settings_queue_layout_1.addWidget(self.debug_btn)
+
+        settings_queue_layout.addLayout(settings_queue_layout_1)
+
+        # shuffle
         # if on, how many on each, 
 
         # =========================
@@ -2908,6 +2926,8 @@ class Player(QWidget):
         self.settings_online_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.settings_MUSIXMATCH_USER_TOKEN_text.setText(self.engine.preset.MUSIXMATCH_USER_TOKEN)
         self.settings_MUSIXMATCH_USER_TOKEN_text.textChanged.connect(self._apply_ui_to_engine)
+        # Queue
+        self.debug_btn.clicked.connect(self._update_tab_order)
         # Library
         self.library_sort_drop.currentIndexChanged.connect(self._library_settings_changed)
         self.library_images_cb.stateChanged.connect(self._library_settings_changed)
@@ -2916,6 +2936,42 @@ class Player(QWidget):
         self.engine.songEnded.connect(self._handle_song_end)
 
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _tabs_moved(self, from_index: int, to_index: int):
+        self.engine.preset.tab_order = [
+            self.tabs.tabText(i)
+            for i in range(self.tabs.count())
+        ]
+
+        self._autosave_current_preset()
+
+    def _update_tab_order(self):
+        default_order = [
+            "Player",
+            "Lyrics",
+            "Queue",
+            "Library",
+            "Settings",
+        ]
+        tab_order = self.engine.preset.tab_order or default_order
+        if tab_order is None:
+            logger.debug("🟣🔴 No tab order set")
+            return
+        #the yellow emoji is: 
+        logger.debug("🟣 Updating tab order to %s", tab_order)
+        widgets = {}
+
+        for i in range(self.tabs.count()):
+            widgets[self.tabs.tabText(i)] = self.tabs.widget(i)
+
+        for i in range(self.tabs.count() - 1, -1, -1):
+            self.tabs.removeTab(i)
+
+        for tab in tab_order:
+            widget = widgets.get(tab)
+
+            if widget is not None:
+                self.tabs.addTab(widget, tab)
 
     def _select_library_song_by_index(self, song_index: int):
         if not hasattr(self, "song_list"):
@@ -2998,7 +3054,7 @@ class Player(QWidget):
                             icon_path = cover_path
 
                     except Exception as e:
-                        logger.warning("Library cover load failed: %s", e)
+                        logger.warning("🟡 Library cover load failed: %s", e)
 
                 item.setIcon(QIcon(icon_path))
             self.song_list.addItem(item)
@@ -3245,7 +3301,7 @@ class Player(QWidget):
                 int(geometry.get("h", self.height()))
             ))
         except Exception as e:
-            logger.warning("Main window geometry restore failed: %s", e)
+            logger.warning("🟡 Main window geometry restore failed: %s", e)
 
     def _save_all_window_positions(self):
         self.engine.preset.main_window_geometry = self._geometry_to_dict(self)
@@ -3501,7 +3557,7 @@ class Player(QWidget):
                 json.dump(self._current_preset(), f, indent=2)
             logger.debug("🟣 Preset Autosaved")
         except Exception as e:
-            logger.warning("Preset autosave failed: %s", e)
+            logger.warning("🟡Preset autosave failed: %s", e)
 
     def _autosave_current_preset(self) -> None:
         if getattr(self, "_loading_ui", False):
@@ -3617,7 +3673,7 @@ class Player(QWidget):
 
         thread.started.connect(worker.run)
 
-        safe_song_path = song_path or ""
+        safe_song_path = song_path or None
 
         worker.finished.connect(
             lambda data, rid=request_id, path=safe_song_path:
@@ -3658,7 +3714,7 @@ class Player(QWidget):
 
         self.lyrics_list.blockSignals(False)
         self.lyrics_status.setText("Lyrics failed to load")
-        logger.warning("Lyrics worker failed: %s", error)
+        logger.warning("🟡 Lyrics worker failed: %s", error)
 
     def _lyrics_loaded(self, data, request_id=None, song_path=None):
         if song_path != self.engine.get_current_song():
@@ -3809,7 +3865,7 @@ class Player(QWidget):
 
     def dropEvent(self, event):
         if not isValid(self.song_list):
-            logger.warning("song_list was deleted, skipping dropEvent")
+            logger.warning("🟡 song_list was deleted, skipping dropEvent")
             return
         allowed_exts = (".ogg", ".opus", ".oga", ".flac")
 
@@ -4264,6 +4320,7 @@ class Player(QWidget):
             self.settings_normalize_audio_cb.setChecked(bool(p.normalize_audio))
             self.settings_online_lyrics_cb.setChecked(bool(p.online_lyrics))
             self.settings_MUSIXMATCH_USER_TOKEN_text.setText(str(p.MUSIXMATCH_USER_TOKEN))
+            self.tab_order = p.tab_order
 
             for widget in widgets_to_block:
                 widget.blockSignals(False)
@@ -4297,6 +4354,7 @@ class Player(QWidget):
             self.engine.normalize_audio = p.normalize_audio
 
             self.engine.lyrics.MUSIXMATCH_USER_TOKEN = p.MUSIXMATCH_USER_TOKEN
+            self._update_tab_order()
             self._library_settings_changed()
             self._fill_queue()
 
@@ -4328,6 +4386,7 @@ class Player(QWidget):
         p.normalize_audio = self.settings_normalize_audio_cb.isChecked()
         p.online_lyrics = self.settings_online_lyrics_cb.isChecked()
         p.MUSIXMATCH_USER_TOKEN = self.settings_MUSIXMATCH_USER_TOKEN_text.text()
+        p.tab_order = self.tab_order
 
         self.engine.online_lyrics = p.online_lyrics
         self.engine.normalize_audio = p.normalize_audio
@@ -4365,7 +4424,7 @@ class Player(QWidget):
                 self.engine.lyrics.floating_window = None
 
         except Exception as e:
-            logger.warning("Failed during exit cleanup: %s", e)
+            logger.warning("🟡 Failed during exit cleanup: %s", e)
 
         super().closeEvent(event)
 
