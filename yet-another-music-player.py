@@ -15,7 +15,7 @@ Every time I worked on it
   5-10-26 09:30 PM === Added Translation Support
   5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
   5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
-  + Sliders and Translation Bug Fixede
+  + Sliders and Translation Bug Fixes
   5-17-26 12:11 AM === small bug fixes,
   + Added Queue button (auto queing coming soon), also made the loudness thingy no longer logger.info (its logger.debug)
   5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
@@ -29,6 +29,8 @@ Every time I worked on it
   5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
   5-26-26 06:16 PM === bug fixes, Added Draggable Tabs, Emoji Logs fixed
   + Queue Slots Draggable, Smooth Scrolling
+  5-27-26 01:47 PM === Queue Slots had .ogg and werent the same name as library, lyrics show current song then load lyrics
+  5-28-26 01:21 AM === VocaDB support
 
 Known Issues:
     * None
@@ -412,13 +414,14 @@ class LyricsFetcher(QObject):
         for fallback in (
             self.fetch_from_lrclib,
             self.fetch_from_lyrics_ovh,
+            self.fetch_from_vocadb,
             self.fetch_from_vocaloid_wiki,
         ):
             try:
                 lyrics = fallback(artist, title)
 
                 if lyrics:
-                    logger.debug("Lyrics found from fallback: %s", fallback.__name__)
+                    logger.debug("🟣 Lyrics found from fallback: %s", fallback.__name__)
                     return lyrics
 
             except Exception as e:
@@ -604,6 +607,160 @@ class LyricsFetcher(QObject):
             return text.strip()
 
         logger.debug("Fallback failed: Vocaloid Wiki")
+        return None
+
+    def _get_text(self, url, headers=None, timeout=10):
+        req = Request(url, headers=headers or {"user-agent": "Mozilla/5.0"}, method="GET")
+
+        try:
+            with urlopen(req, timeout=timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.debug("Text fetch failed: %s", e)
+            return ""
+
+    def fetch_vocadb_lyrics_id_from_page(self, song_id):
+        text = self._get_text(f"https://vocadb.net/api/songs/{song_id}")
+        try:
+            song = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+        ids_to_try = [song_id]
+        original_id = song.get("originalVersionId")
+        if original_id:
+            ids_to_try.append(original_id)
+
+        for sid in ids_to_try:
+            text = self._get_text(
+                f"https://vocadb.net/api/songs?query=id:{sid}&fields=lyrics&maxResults=1"
+            )
+
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+
+            items = data.get("items") or []
+            if not items:
+                continue
+
+            lyrics = items[0].get("lyrics") or []
+            if lyrics:
+                lyrics_id = int(lyrics[0]["id"])
+                logger.debug("Found VocaDB lyricsId from API: %s", lyrics_id)
+                return lyrics_id
+        html = self._get_text(f"https://vocadb.net/S/{song_id}/lyrics?lyricsId=")
+
+        match = re.search(r'lyricsId=(\d+)', html)
+        if match:
+            return int(match.group(1))
+
+        logger.debug("Could not find VocaDB lyricsId for song %s", song_id)
+        return None
+
+    def fetch_from_vocadb(self, artist, title):
+        logger.debug("Trying VocaDB...")
+
+        search_queries = [
+            f"{artist} {title}",
+            title,
+            re.sub(r"\s*-\s*", " ", title),
+            re.sub(r"\s*\(.*?\)\s*", " ", title).strip(),
+        ]
+
+        seen = set()
+
+        for query in search_queries:
+            query = " ".join(query.split())
+
+            if not query or query in seen:
+                continue
+
+            seen.add(query)
+
+            url = "https://vocadb.net/api/songs"
+
+            params = {
+                "query": query,
+                "maxResults": 10,
+                "fields": "Lyrics",
+                "nameMatchMode": "Auto",
+            }
+
+            data = self._get_json(url, params=params)
+
+            if not isinstance(data, dict):
+                continue
+
+            items = data.get("items")
+
+            if not isinstance(items, list) or not items:
+                logger.debug("VocaDB no results for query: %s", query)
+                continue
+
+            for song in items:
+                song_id = song.get("id")
+
+                if not song_id:
+                    continue
+
+                lyrics_list = song.get("lyrics", [])
+
+                if not lyrics_list:
+                    logger.debug(
+                        "VocaDB song found but API returned no lyrics list: %s; trying page scrape",
+                        song_id
+                    )
+
+                    lyrics = self.fetch_from_vocadb_by_song_id(song_id)
+
+                    if lyrics:
+                        return lyrics.strip()
+
+                    continue
+
+                for lyric_entry in lyrics_list:
+                    lyric_id = lyric_entry.get("id")
+
+                    if not lyric_id:
+                        continue
+
+                    lyrics = self.fetch_vocadb_lyrics(lyric_id)
+
+                    if lyrics:
+                        logger.debug("Fallback success: VocaDB")
+                        return lyrics.strip()
+
+        logger.debug("Fallback failed: VocaDB no usable lyrics")
+        return None
+
+    def fetch_from_vocadb_by_song_id(self, song_id):
+        logger.debug("Trying VocaDB song ID page scrape: %s", song_id)
+
+        lyric_id = self.fetch_vocadb_lyrics_id_from_page(song_id)
+
+        if lyric_id:
+            return self.fetch_vocadb_lyrics(lyric_id)
+
+        return None
+
+    def fetch_vocadb_lyrics(self, lyric_id):
+        logger.debug("Trying VocaDB lyric ID: %s", lyric_id)
+
+        url = f"https://vocadb.net/api/songs/lyrics/{lyric_id}"
+        data = self._get_json(url)
+
+        if not isinstance(data, dict):
+            return None
+
+        lyrics = data.get("value")
+
+        if isinstance(lyrics, str) and lyrics.strip():
+            logger.debug("Fallback success: VocaDB lyric value")
+            return lyrics.strip()
+
+        logger.debug("VocaDB lyric failed. Data: %r", data)
         return None
 
 
@@ -3443,7 +3600,12 @@ class Player(QWidget):
         if not path:
             return f"Missing song #{index}"
 
-        return os.path.basename(path)
+        artist, title, cover_path = self.engine.get_data_for_path(path)
+
+        if self.engine.preset.library_sort_mode == 1:
+            return f"{artist} - {title}"
+
+        return f"{title} - {artist}"
 
     def _refresh_queue_list(self):
         if not hasattr(self, "queue_list"):
@@ -3898,16 +4060,45 @@ class Player(QWidget):
 
         self._play_song_at_index(int(index))
 
+    def _temp_load_lyrics_for_current_song(self):
+        artist, title, _ = self.engine.get_data()
+
+        loading_lyrics = {
+            "timed": False,
+            "lyrics": [
+                {
+                    "time": None,
+                    "text": f"{artist} - {title}"
+                }
+            ]
+        }
+
+        self.current_lyrics_data = loading_lyrics["lyrics"]
+        self.current_lyrics_timed = False
+        self.current_lyrics_index = 0
+
+        self.engine.lyrics.update_window(
+            self.current_lyrics_data,
+            0,
+            False
+        )
+
+        self.engine.lyrics.update_floating_window(
+            self.current_lyrics_data,
+            0,
+            reset_hover=True
+        )
+
     def _load_lyrics_for_current_song(self):
         self._lyrics_request_id = getattr(self, "_lyrics_request_id", 0) + 1
         self.current_lyrics_data = []
         self.current_lyrics_index = -1
         self.lyrics_list.clear()
         self.lyrics_status.setText("Loading lyrics.")
+        self._temp_load_lyrics_for_current_song()
         self._lyrics_load_timer.start(700)
 
     def _load_lyrics_for_current_song_now(self):
-        self._lyrics_request_id = getattr(self, "_lyrics_request_id", 0) + 1
         request_id = self._lyrics_request_id
         song_path = self.engine.get_current_song()
 
@@ -3917,7 +4108,9 @@ class Player(QWidget):
 
         self.lyrics_list.blockSignals(True)
         self.lyrics_list.clear()
-        self.lyrics_status.setText("Loading lyrics.")
+        self.lyrics_status.setText("Loading lyrics..")
+
+        
 
         thread = QThread(self)
         worker = LyricsWorker(self.engine.lyrics)
@@ -3984,8 +4177,14 @@ class Player(QWidget):
         try:
             self.current_lyrics_data = data["lyrics"] if data else []
 
-            if not self.current_lyrics_data:
+            is_placeholder = (
+                len(self.current_lyrics_data) == 1
+                and self.current_lyrics_data[0].get("time") is None
+            )
+
+            if is_placeholder:
                 self.lyrics_status.setText("No lyrics loaded")
+                logger.info("🔴 No Lyrics Available")
                 return
 
             self.current_lyrics_timed = bool(data.get("timed", False))
@@ -3995,7 +4194,7 @@ class Player(QWidget):
                 logger.info("🟢 Timed lyrics")
             else:
                 self.lyrics_status.setText("Plain lyrics")
-                logger.info("🟡 Plain lyrics" if self.engine.lyrics.get_lyrics() else "🔴 Lyrics file not found")
+                logger.info("🟡 Plain lyrics" if self.current_lyrics_data else "🔴 No Lyrics Avaliable")
 
             self.lyrics_list.clear()
 
