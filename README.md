@@ -39,9 +39,10 @@ README file is currently updated per version
 <details>
 <summary>Photos:</summary>
 <br>
-<img width="1114" height="744" alt="Screenshot-2026-05-10-213540" src="https://github.com/user-attachments/assets/b563dbbc-9fa3-460b-8a31-7394e5115486" />
-<img width="1114" height="744" alt="Screenshot-2026-05-10-213546" src="https://github.com/user-attachments/assets/16ca66b0-711d-4227-b7dc-46891324c64b" />
-<img width="1114" height="744" alt="Screenshot-2026-05-10-213557" src="https://github.com/user-attachments/assets/994703d1-5af8-4768-bbe3-739ca1d25157" />
-<img width="1114" height="744" alt="Screenshot-2026-05-10-213607" src="https://github.com/user-attachments/assets/d5d3eaf7-0077-40d0-96a5-4c99cd330569" />
-<img width="766" height="494" alt="Screenshot-2026-05-10-213634" src="https://github.com/user-attachments/assets/59dd8053-66b9-42da-af89-3b3e2d344af3" />
+<img width="1119" height="717" alt="Screenshot-2026-05-28-012259" src="https://github.com/user-attachments/assets/eb0ded42-b3a6-45f6-a5d0-8587bf4a3ec7" />
+<img width="1119" height="717" alt="Screenshot-2026-05-28-012305" src="https://github.com/user-attachments/assets/ef50aaaf-6934-4e19-a6cc-a32fb325f9c2" />
+<img width="1119" height="717" alt="Screenshot-2026-05-28-012311" src="https://github.com/user-attachments/assets/ff57d05e-8440-495b-bcb7-e77b88a187af" />
+<img width="1119" height="717" alt="Screenshot-2026-05-28-012315" src="https://github.com/user-attachments/assets/de9fabea-edf6-4fd9-ad54-777ad8da582c" />
+<img width="1119" height="717" alt="Screenshot-2026-05-28-012331" src="https://github.com/user-attachments/assets/7a1381e9-36ca-44f3-a3fc-b335243262c4" />
+<img width="893" height="501" alt="Screenshot-2026-05-28-012426" src="https://github.com/user-attachments/assets/5e92445c-f378-45d9-9e38-8e71b70871b9" />
 </details>
