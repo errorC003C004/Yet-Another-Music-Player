@@ -31,6 +31,7 @@ Every time I worked on it
   + Queue Slots Draggable, Smooth Scrolling
   5-27-26 01:47 PM === Queue Slots had .ogg and werent the same name as library, lyrics show current song then load lyrics
   5-28-26 01:21 AM === VocaDB support
+  5-31-26 09:34 PM === Spotify Font Added
 
 Known Issues:
     * None
@@ -70,7 +71,7 @@ from mutagen import File as MutagenFile
 from mutagen.flac import Picture
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QFrame, QInputDialog, QStyledItemDelegate, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon
+from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon, QFontDatabase
 from dataclasses import dataclass, asdict
 from collections import deque
 from pathlib import Path
@@ -93,6 +94,7 @@ player_ver = "1.2"
 
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
+FONT_DIR = Path(APPDATA_DIR) / "fonts"
 SETTINGS_PATH = os.path.join(APPDATA_DIR, "settings.json")
 BLANK_PATH = os.path.join(APPDATA_DIR, "blank.png")
 ICON_PATH = os.path.join(APPDATA_DIR, "icon.png")
@@ -882,6 +884,7 @@ class QueueRowWidget(QWidget):
         layout.addWidget(cover)
 
         title = QLabel(text)
+        title.setObjectName("QueueRowTitle")
         title.setStyleSheet("background: transparent;")
         title.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -1120,14 +1123,14 @@ class LyricsPopupWindow(QWidget):
 
         if self.contains_japanese(text):
             self.label.setStyleSheet("""
-                font-family: 'Noto Sans JP';
+                font-family: 'Spotify Mix UI', 'Noto Sans JP';
                 color: white;
                 font-size: 22px;
                 font-weight: 700;
             """)
         else:
             self.label.setStyleSheet("""
-                font-family: 'Segoe UI Variable';
+                font-family: 'Spotify Mix UI', 'Segoe UI Variable';
                 color: white;
                 font-size: 22px;
                 font-weight: 700;
@@ -2818,7 +2821,7 @@ class Player(QWidget):
         self.now_playing_title.setObjectName("SongTitle")
 
         self.now_playing_artist = QLabel("Drag .ogg files into the window")
-        self.now_playing_artist.setObjectName("MutedLabel")
+        self.now_playing_artist.setObjectName("SongArtist")
 
         self.song_list = LibraryListWidget()
         self.song_list.setObjectName("SongList")
@@ -3320,14 +3323,21 @@ class Player(QWidget):
         self.settings_MUSIXMATCH_USER_TOKEN_text.setText(self.engine.preset.MUSIXMATCH_USER_TOKEN)
         self.settings_MUSIXMATCH_USER_TOKEN_text.textChanged.connect(self._apply_ui_to_engine)
         # Queue
-        self.debug_btn.clicked.connect(self._update_tab_order)
+        #self.debug_btn.clicked.connect(self._update_tab_order)
         # Library
         self.library_sort_drop.currentIndexChanged.connect(self._library_settings_changed)
         self.library_images_cb.stateChanged.connect(self._library_settings_changed)
 
 
         self.engine.songEnded.connect(self._handle_song_end)
-
+        for font_file in FONT_DIR.glob("*.ttf"):
+            print(f"🟣 Loading: {font_file.name}")
+            font_id = QFontDatabase.addApplicationFont(str(font_file))
+            if font_id == -1:
+                print(f"🟣🟡 Failed: {font_file.name}")
+            else:
+                text = QFontDatabase.applicationFontFamilies(font_id)
+                print(f"🟣 Loaded: {font_file.name} %s", text)
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
 
     def smooth_scroll_to_item(self, item, duration=220):
@@ -3456,6 +3466,7 @@ class Player(QWidget):
             path = data.get("path") if data else None
 
             item = QListWidgetItem(self._library_song_display(index))
+            item.setFont(self._title_font(bold=True))
             item.setData(Qt.UserRole, index)
 
             if self.engine.preset.library_show_images:
@@ -3619,6 +3630,7 @@ class Player(QWidget):
             path = data.get("path") if data else None
 
             item = QListWidgetItem(f"{self._queue_song_name(index)}")
+            item.setFont(self._title_font(bold=True))
             item.setData(Qt.UserRole, index)
             item.setSizeHint(QSize(260, 68))
 
@@ -4602,9 +4614,87 @@ class Player(QWidget):
     def _update_volume_label(self, value):
         self.volume_value_label.setText(f"{value}%")
 
+    def _title_font_family(self) -> str:
+        if not hasattr(self, "current_theme") or self.current_theme is None:
+            return DEFAULT_THEME["title_font"]
+
+        return self.current_theme.get("title_font", DEFAULT_THEME["title_font"])
+
+    def _title_font(self, point_size: int | None = None, bold: bool = False) -> QFont:
+        font = QFont(self._title_font_family())
+
+        if point_size is not None:
+            font.setPointSize(point_size)
+
+        font.setBold(bold)
+        return font
+
+    def _repolish_widget(self, widget):
+        if widget is None:
+            return
+
+        try:
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.updateGeometry()
+            widget.update()
+        except Exception:
+            pass
+
+    def _apply_title_font_to_song_text_widgets(self):
+        title_font = self._title_font(15, True)
+        artist_font = self._title_font(11, True)
+        item_font = self._title_font(bold=True)
+
+        title_family = self._title_font_family()
+        text_color = self.current_theme.get("text", DEFAULT_THEME["text"])
+        muted_color = self.current_theme.get("muted_text", DEFAULT_THEME["muted_text"])
+
+        title_label = getattr(self, "now_playing_title", None)
+        if title_label is not None:
+            title_label.setFont(title_font)
+            title_label.setStyleSheet(f"""
+                font-family: "{title_family}";
+                font-size: {title_font.pointSize()}pt;
+                font-weight: 700;
+                color: {text_color};
+                background-color: transparent;
+            """)
+            self._repolish_widget(title_label)
+
+        artist_label = getattr(self, "now_playing_artist", None)
+        if artist_label is not None:
+            artist_label.setFont(artist_font)
+            artist_label.setStyleSheet(f"""
+                font-family: "{title_family}";
+                font-size: {artist_font.pointSize()}pt;
+                font-weight: 600;
+                color: {muted_color};
+                background-color: transparent;
+            """)
+            self._repolish_widget(artist_label)
+
+        for list_widget in (
+            getattr(self, "song_list", None),
+            getattr(self, "queue_list", None),
+        ):
+            if list_widget is None:
+                continue
+
+            list_widget.setFont(item_font)
+
+            for row in range(list_widget.count()):
+                item = list_widget.item(row)
+                if item is not None:
+                    item.setFont(item_font)
+
+            self._repolish_widget(list_widget.viewport())
+            self._repolish_widget(list_widget)
+
     def _set_now_playing_info(self, artist: str, title: str):
         self.now_playing_title.setText(title or "Unknown Title")
         self.now_playing_artist.setText(artist or "Unknown Artist")
+        self._apply_title_font_to_song_text_widgets()
 
     def _position_slider_moved(self, value):
         full_time = self.position_slider.maximum()
@@ -4896,7 +4986,7 @@ QSS_TEMPLATE = """
 QWidget {{
     background-color: {bg};
     color: {text};
-    font-family: "{font}","Segoe UI",system-ui;
+    font-family: "{font}", "Spotify Mix UI", "Segoe UI",system-ui;
     font-size: 13px;
 }}
 
@@ -4907,6 +4997,9 @@ QTabWidget::pane {{
 }}
 QTabBar::tab {{
     background: {panel};
+    font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+    font-size: 14px;
+    font-weight: 600;
     color: {muted_text};
     border: 1px solid {border};
     border-bottom: 0;
@@ -5102,6 +5195,36 @@ QLabel {{
     background-color: transparent;
 }}
 
+QLabel#SongTitle {{
+    font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+    font-size: 28px;
+    font-weight: 700;
+    color: {text};
+}}
+
+QLabel#SongArtist {{
+    font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+    font-size: 15px;
+    font-weight: 600;
+    color: {muted_text};
+}}
+
+QLabel#QueueRowTitle {{
+    font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+    font-weight: 600;
+}}
+
+QListWidget#SongList,
+QListWidget#QueueList {{
+    font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+}}
+
+QListWidget#SongList::item,
+QListWidget#QueueList::item {{
+    font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+    font-weight: 600;
+}}
+
 QLabel#LyricsLabel {{
     background-color: {lyrics_bg};
     color: {lyrics_text};
@@ -5119,7 +5242,8 @@ QLabel#FloatingLyricsLabel {{
 
 
 DEFAULT_THEME = {
-    "font": "Noto Sans",
+    "font": "Spotify Mix UI",
+    "title_font": "Spotify Mix UI Title",
     "lyrics_en_font": "Segoe UI Variable",
     "lyrics_jp_font": "Noto Sans JP",
     "bg": "#0f1115",
@@ -5178,6 +5302,9 @@ def set_theme_value(self, key: str, value: str):
         self.player.current_theme = self.current_theme
 
     apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    if hasattr(self, "player") and hasattr(self.player, "_apply_title_font_to_song_text_widgets"):
+        self.player._apply_title_font_to_song_text_widgets()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
