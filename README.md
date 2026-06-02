@@ -1,4 +1,4 @@
-# Yet-Another-Music-Player
+# YAMP (Yet-Another-Music-Player)
 
 Took Inspo from [foobar2000](https://www.foobar2000.org/) and [Spotify](https://www.spotify.com/)
 
