@@ -31,7 +31,7 @@ README file is currently updated per version
 <details>
 <summary>Known Issues:</summary>
 
-  * None
+  * Translation Not Working
 
 
 </details>
