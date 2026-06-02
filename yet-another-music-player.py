@@ -32,6 +32,7 @@ Every time I worked on it
   5-27-26 01:47 PM === Queue Slots had .ogg and werent the same name as library, lyrics show current song then load lyrics
   5-28-26 01:21 AM === VocaDB support
   5-31-26 09:34 PM === Spotify Font Added
+  6-01-26 06:15 PM === All Font Sizes Can be Changed, Lyrics Fallback shown in Text
 
 Known Issues:
     * None
@@ -381,7 +382,7 @@ class LyricsFetcher(QObject):
         self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.engine.preset.MUSIXMATCH_USER_TOKEN
 
         tracks = self.search_track(artist, title)
-
+        self.lyric_stuff.engine.player.lyrics_status.setText("Trying Musixmatch...")
         if tracks:
             for item in tracks:
                 track = item.get("track", {})
@@ -412,6 +413,7 @@ class LyricsFetcher(QObject):
             logger.debug("No Musixmatch results found.")
 
         logger.debug("Trying fallback providers...")
+        self.lyric_stuff.engine.player.lyrics_status.setText("Trying fallback...")
 
         for fallback in (
             self.fetch_from_lrclib,
@@ -521,6 +523,7 @@ class LyricsFetcher(QObject):
 
     def fetch_from_lrclib(self, artist, title):
         logger.debug("Trying LRCLIB...")
+        self.lyric_stuff.engine.player.lyrics_status.setText("Trying LRCLIB...")
         url = "https://lrclib.net/api/search"
 
         params = {
@@ -551,6 +554,7 @@ class LyricsFetcher(QObject):
 
     def fetch_from_lyrics_ovh(self, artist, title):
         logger.debug("Trying lyrics.ovh...")
+        self.lyric_stuff.engine.player.lyrics_status.setText("Trying lyrics.ovh...")
         url = f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}"
 
         data = self._get_json(url)
@@ -569,6 +573,7 @@ class LyricsFetcher(QObject):
 
     def fetch_from_vocaloid_wiki(self, artist, title):
         logger.debug("Trying Vocaloid Wiki...")
+        self.lyric_stuff.engine.player.lyrics_status.setText("Trying Vocaloid Wiki...")
         url = "https://vocaloidlyrics.miraheze.org/w/api.php"
 
         params = {
@@ -663,6 +668,7 @@ class LyricsFetcher(QObject):
 
     def fetch_from_vocadb(self, artist, title):
         logger.debug("Trying VocaDB...")
+        self.lyric_stuff.engine.player.lyrics_status.setText("Trying VocaDB...")
 
         search_queries = [
             f"{artist} {title}",
@@ -2786,6 +2792,9 @@ class Player(QWidget):
         self.settings_online_lyrics_cb = QCheckBox("Online Lyrics")
         self.settings_MUSIXMATCH_USER_TOKEN_text = QLineEdit("Paste your MUSIXMATCH user token here")
 
+        self.edit_theme_font_size_btn = QPushButton("Edit Font Size")
+        self.reset_selected_theme_font_size_btn = QPushButton("Reset Font Size")
+
         self.volume_slider = JumpSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(int(self.engine.preset.volume))
@@ -2927,7 +2936,7 @@ class Player(QWidget):
         self.lyrics_list.setFocusPolicy(Qt.NoFocus)
         self.lyrics_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
 
-        self.lyrics_status = QLabel("No lyrics loaded")
+        self.lyrics_status = QLabel("No lyrics Found")
         self.lyrics_status.setObjectName("MutedLabel")
 
         self.current_lyrics_data = []
@@ -3111,8 +3120,7 @@ class Player(QWidget):
         settings_queue_layout = QVBoxLayout(settings_queue_group)
 
         settings_queue_layout_1 = QHBoxLayout()
-        self.debug_btn = QPushButton("Debug")
-        settings_queue_layout_1.addWidget(self.debug_btn)
+        #settings_queue_layout_1.addWidget(self.)
 
         settings_queue_layout.addLayout(settings_queue_layout_1)
 
@@ -3144,7 +3152,7 @@ class Player(QWidget):
         # =========================
 
         settings_theme_group = QGroupBox("Theme")
-        settings_theme_layout = QHBoxLayout(settings_theme_group)
+        settings_theme_layout = QVBoxLayout(settings_theme_group)
 
         self.theme_color_drop = QComboBox()
         self.theme_color_drop.addItems([
@@ -3189,14 +3197,49 @@ class Player(QWidget):
         self.reset_selected_theme_btn = QPushButton("Reset Selected")
         self.reset_all_theme_btn = QPushButton("Reset All")
 
-        settings_theme_layout.addWidget(self.theme_color_drop, 1)
-        settings_theme_layout.addWidget(self.edit_theme_color_btn)
-        settings_theme_layout.addWidget(self.reset_selected_theme_btn)
-        settings_theme_layout.addWidget(self.reset_all_theme_btn)
+        self.theme_font_size_drop = QComboBox()
+        self.theme_font_size_drop.addItems([
+            "Title Font",
+            "Artist Font",
+            "Lyrics Font",
+            "Normal Text Font",
+        ])
 
-        self.edit_theme_color_btn.clicked.connect(self._edit_selected_theme_color)
-        self.reset_selected_theme_btn.clicked.connect(self._reset_selected_theme_color)
-        self.reset_all_theme_btn.clicked.connect(self._reset_all_theme)
+        self.theme_font_size_keys = [
+            "title_font_size",
+            "artist_font_size",
+            "lyrics_font_size",
+            "normal_font_size",
+        ]
+
+        self.theme_font_size_drop = QComboBox()
+        self.theme_font_size_drop.addItems([
+            "Title Font",
+            "Artist Font",
+            "Lyrics Font",
+            "Normal Text Font",
+        ])
+
+        self.theme_font_size_keys = [
+            "title_font_size",
+            "artist_font_size",
+            "lyrics_font_size",
+            "normal_font_size",
+        ]
+
+        settings_theme_layout_1 = QHBoxLayout()
+        settings_theme_layout_1.addWidget(self.theme_color_drop, 1)
+        settings_theme_layout_1.addWidget(self.edit_theme_color_btn)
+        settings_theme_layout_1.addWidget(self.reset_selected_theme_btn)
+        settings_theme_layout_1.addWidget(self.reset_all_theme_btn)
+
+        settings_theme_layout_2 = QHBoxLayout()
+        settings_theme_layout_2.addWidget(self.theme_font_size_drop, 1)
+        settings_theme_layout_2.addWidget(self.edit_theme_font_size_btn)
+        settings_theme_layout_2.addWidget(self.reset_selected_theme_font_size_btn)
+
+        settings_theme_layout.addLayout(settings_theme_layout_1)
+        settings_theme_layout.addLayout(settings_theme_layout_2)
 
         # =========================
         # WIDGETS ADDED
@@ -3305,6 +3348,10 @@ class Player(QWidget):
         self.show_console_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.logging_level_drop.currentIndexChanged.connect(self._set_logging_level)
         self.logging_level_drop.currentIndexChanged.connect(self._apply_ui_to_engine)
+        # Console
+
+        # Presets
+
         # Player
         self.settings_mute_cb.setChecked(self.engine.preset.muted)
         self.settings_shuffle_cb.setChecked(self.engine.preset.shuffle)
@@ -3323,22 +3370,82 @@ class Player(QWidget):
         self.settings_MUSIXMATCH_USER_TOKEN_text.setText(self.engine.preset.MUSIXMATCH_USER_TOKEN)
         self.settings_MUSIXMATCH_USER_TOKEN_text.textChanged.connect(self._apply_ui_to_engine)
         # Queue
-        #self.debug_btn.clicked.connect(self._update_tab_order)
+
         # Library
         self.library_sort_drop.currentIndexChanged.connect(self._library_settings_changed)
         self.library_images_cb.stateChanged.connect(self._library_settings_changed)
+        # Theme
+        self.edit_theme_color_btn.clicked.connect(self._edit_selected_theme_color)
+        self.reset_selected_theme_btn.clicked.connect(self._reset_selected_theme_color)
+        self.reset_all_theme_btn.clicked.connect(self._reset_all_theme)
+        self.edit_theme_font_size_btn.clicked.connect(self._edit_selected_theme_font_size)
+        self.reset_selected_theme_font_size_btn.clicked.connect(self._reset_selected_theme_font_size)
 
 
         self.engine.songEnded.connect(self._handle_song_end)
         for font_file in FONT_DIR.glob("*.ttf"):
-            print(f"🟣 Loading: {font_file.name}")
+            logger.debug(f"🟣 Loading: {font_file.name}")
             font_id = QFontDatabase.addApplicationFont(str(font_file))
             if font_id == -1:
-                print(f"🟣🟡 Failed: {font_file.name}")
+                logger.debug(f"🟣🟡 Failed: {font_file.name}")
             else:
                 text = QFontDatabase.applicationFontFamilies(font_id)
-                print(f"🟣 Loaded: {font_file.name} %s", text)
+                logger.debug(f"🟣 Loaded: {font_file.name} %s", text)
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _title_font(self, point_size: int | None = None, bold: bool = False) -> QFont:
+        font = QFont(self._title_font_family())
+
+        if point_size is None:
+            point_size = self._theme_int(
+                "normal_font_size",
+                int(DEFAULT_THEME["normal_font_size"])
+            )
+
+        font.setPointSize(point_size)
+        font.setBold(bold)
+        return font
+
+    def _theme_int(self, key: str, default: int) -> int:
+        if not hasattr(self, "current_theme") or self.current_theme is None:
+            return default
+
+        try:
+            return int(self.current_theme.get(key, default))
+        except Exception:
+            return default
+
+    def _reset_selected_theme_font_size(self):
+        index = self.theme_font_size_drop.currentIndex()
+        if index < 0 or index >= len(self.theme_font_size_keys):
+            return
+
+        key = self.theme_font_size_keys[index]
+        if key not in DEFAULT_THEME:
+            return
+
+        set_theme_value(self.theme, key, DEFAULT_THEME[key])
+
+    def _edit_selected_theme_font_size(self):
+        index = self.theme_font_size_drop.currentIndex()
+        if index < 0 or index >= len(self.theme_font_size_keys):
+            return
+
+        key = self.theme_font_size_keys[index]
+        current = self._theme_int(key, int(DEFAULT_THEME.get(key, 13)))
+
+        value, ok = QInputDialog.getInt(
+            self,
+            "Edit Font Size",
+            f"{self.theme_font_size_drop.currentText()} size:",
+            current,
+            6,
+            72,
+            1
+        )
+
+        if ok:
+            set_theme_value(self.theme, key, int(value))
 
     def smooth_scroll_to_item(self, item, duration=220):
         if item is None:
@@ -4195,7 +4302,7 @@ class Player(QWidget):
             )
 
             if is_placeholder:
-                self.lyrics_status.setText("No lyrics loaded")
+                self.lyrics_status.setText("No lyrics Found")
                 logger.info("🔴 No Lyrics Available")
                 return
 
@@ -4642,9 +4749,9 @@ class Player(QWidget):
             pass
 
     def _apply_title_font_to_song_text_widgets(self):
-        title_font = self._title_font(15, True)
-        artist_font = self._title_font(11, True)
-        item_font = self._title_font(bold=True)
+        title_font = self._title_font(self._theme_int("title_font_size", 15), True)
+        artist_font = self._title_font(self._theme_int("artist_font_size", 11), True)
+        item_font = self._title_font(self._theme_int("normal_font_size", 13), True)
 
         title_family = self._title_font_family()
         text_color = self.current_theme.get("text", DEFAULT_THEME["text"])
@@ -4986,8 +5093,8 @@ QSS_TEMPLATE = """
 QWidget {{
     background-color: {bg};
     color: {text};
-    font-family: "{font}", "Spotify Mix UI", "Segoe UI",system-ui;
-    font-size: 13px;
+    font-family: "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
+    font-size: {normal_font_size}pt;
 }}
 
 /* Tabs */
@@ -5197,14 +5304,14 @@ QLabel {{
 
 QLabel#SongTitle {{
     font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
-    font-size: 28px;
+    font-size: {artist_font_size}pt;
     font-weight: 700;
     color: {text};
 }}
 
 QLabel#SongArtist {{
     font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
-    font-size: 15px;
+    font-size: {lyrics_font_size}pt;
     font-weight: 600;
     color: {muted_text};
 }}
@@ -5249,6 +5356,11 @@ DEFAULT_THEME = {
     "bg": "#0f1115",
     "text": "#e6e9ef",
     "muted_text": "#9aa4b2",
+
+    "title_font_size": 15,
+    "artist_font_size": 11,
+    "lyrics_font_size": 12,
+    "normal_font_size": 10,
 
     "panel": "#151823",
     "panel_active": "#1f2430",
