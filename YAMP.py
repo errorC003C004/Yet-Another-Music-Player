@@ -36,10 +36,12 @@ Every time I worked on it
                         + This Section is Now Not Red in VsCode
     6-03-26 05:18 PM === Fixed Loading.. at Startup
     6-05-26 11:06 PM === Made Queue/Libary Show Artist Under The Title
+                        + Optimized Slots
 
 Known Issues:
     * Translation Not Working on EXE
     * Images for Queue/Library are shifted down (sorry if I made you notice)
+    * Just found out that it takes like 2 secs to load a song instead of instant
 
 Fixed Issues:
     * 
@@ -55,7 +57,6 @@ Future Features:
     * Write Fetched Lyrics to file (or cache)
 
 '''
-
 TRANSLATE_AVAILABLE = None
 translate_import_error = None
 from deep_translator import GoogleTranslator
@@ -876,13 +877,7 @@ class SongRowWidget(QWidget):
         cover.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         if pixmap and not pixmap.isNull():
-            cover.setPixmap(
-                pixmap.scaled(
-                    52, 52,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-            )
+            cover.setPixmap(pixmap)
 
         layout.addWidget(cover, 1, Qt.AlignmentFlag.AlignVCenter)
 
@@ -933,7 +928,6 @@ class SongRowWidget(QWidget):
             handle = QLabel("☰")
             handle.setFixedSize(28, 52)
             handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            handle.setCursor(Qt.CursorShape.OpenHandCursor)
             handle.setStyleSheet("""
                 background: transparent;
                 font-size: 18px;
@@ -1983,18 +1977,55 @@ class Audio(QObject):
         self._nav_locked = False
 
     def get_data_for_path(self, path: str):
-        old_current = self.player.current_song
+        if not path or not os.path.isfile(path):
+            return "Unknown Artist", os.path.basename(path or ""), BLANK_PATH
+
+        cached = self._metadata_cache.get(path)
+        if cached:
+            return cached
 
         try:
-            for key, data in self.player.songs.items():
-                if data.get("path") == path:
-                    self.player.current_song = int(key)
-                    return self.get_data()
+            mf = MutagenFile(path)
+            if mf is None:
+                result = ("Unknown Artist", os.path.splitext(os.path.basename(path))[0], BLANK_PATH)
+                self._metadata_cache[path] = result
+                return result
 
-            return "Unknown Artist", os.path.basename(path), BLANK_PATH
+            artist = "Unknown Artist"
+            title = os.path.splitext(os.path.basename(path))[0]
 
-        finally:
-            self.player.current_song = old_current
+            if hasattr(mf, "get"):
+                artist_value = mf.get("artist", ["Unknown Artist"])
+                title_value = mf.get("title", [title])
+                artist = artist_value[0] if isinstance(artist_value, list) else str(artist_value)
+                title = title_value[0] if isinstance(title_value, list) else str(title_value)
+
+            cover_path = BLANK_PATH
+            pics = mf.get("metadata_block_picture") if hasattr(mf, "get") else None
+
+            pic = None
+            if pics:
+                pic = Picture(base64.b64decode(pics[0]))
+            elif hasattr(mf, "pictures") and mf.pictures:
+                pic = mf.pictures[0]
+
+            if pic:
+                os.makedirs(TEMP_DIR, exist_ok=True)
+                ext = "jpg" if pic.mime in ("image/jpeg", "image/jpg") else "png"
+                h = hashlib.sha256(path.encode()).hexdigest()
+                cover_path = os.path.join(TEMP_DIR, f"cover_{h}.{ext}")
+
+                if not os.path.exists(cover_path):
+                    with open(cover_path, "wb") as f:
+                        f.write(pic.data)
+
+            result = (artist, title, cover_path)
+            self._metadata_cache[path] = result
+            return result
+
+        except Exception as e:
+            logger.warning("Failed to read metadata for path: %s", e)
+            return "Unknown Artist", os.path.splitext(os.path.basename(path))[0], BLANK_PATH
 
     def _apply_playback_state_on_qt_thread(self, state_value: int):
         try:
@@ -2278,7 +2309,6 @@ class Audio(QObject):
             if not self.play_order:
                 self.play_order = [self.player.current_song]
                 self.play_order_pos = 0
-
             artist, title, cover_path = self.get_data()
             must_reload = force_reload or self._current_media_path != song
 
@@ -2447,23 +2477,12 @@ class Audio(QObject):
                     self._finish_nav()
                     return
 
-                if hasattr(self.player, "_queue_changed"):
-                    try:
-                        self.player._queue_changed()
-                    except Exception:
-                        pass
-
                 if self.play_order_pos < len(self.play_order) - 1:
                     self.play_order = self.play_order[:self.play_order_pos + 1]
 
                 self.play_order.append(new_index)
                 self.play_order_pos = len(self.play_order) - 1
 
-                if hasattr(self.player, "_refresh_queue_list"):
-                    try:
-                        self.player._refresh_queue_list()
-                    except Exception:
-                        pass
 
                 if hasattr(self.player, "_fill_queue"):
                     try:
@@ -2742,6 +2761,8 @@ class Player(QWidget):
             "Library",
             "Settings"
         ]
+        self._row_data_cache = {}
+        self._row_pixmap_cache = {}
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
         self.setWindowIcon(QIcon(ICON_PATH))
@@ -2996,7 +3017,6 @@ class Player(QWidget):
         self.queue_list = QueueListWidget(self)
         self.queue_list.setObjectName("QueueList")
         self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        #self.queue_list.setItemDelegate(QueueItemDelegate())
 
         queue_buttons = QHBoxLayout()
         self.add_to_queue_btn = QPushButton("Refresh Queue")
@@ -3352,7 +3372,6 @@ class Player(QWidget):
         self.volume_slider.valueChanged.connect(self._update_volume_label)
 
         self._refresh_preset_dropdown()
-        self.song_list.itemDoubleClicked.connect(self._library_item_double_clicked)
 
         self.lyrics_list.itemDoubleClicked.connect(self._lyric_item_double_clicked)
         self.lyrics_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -3432,6 +3451,53 @@ class Player(QWidget):
                 text = QFontDatabase.applicationFontFamilies(font_id)
                 logger.debug(f"🟣 Loaded: {font_file.name} %s", text)
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _get_row_data_cached(self, index: int):
+        data = self.songs.get(str(index))
+        path = data.get("path") if data else None
+
+        if not path or not os.path.isfile(path):
+            return "Unknown Artist", f"Missing song #{index}", BLANK_PATH
+
+        if not hasattr(self, "_row_data_cache"):
+            self._row_data_cache = {}
+
+        cached = self._row_data_cache.get(path)
+        if cached:
+            return cached
+
+        artist, title, cover_path = self.engine.get_data_for_path(path)
+
+        result = (
+            artist or "Unknown Artist",
+            title or os.path.basename(path),
+            cover_path if cover_path and os.path.exists(cover_path) else BLANK_PATH
+        )
+
+        self._row_data_cache[path] = result
+        return result
+
+    def _get_row_pixmap_cached(self, cover_path: str):
+        cover_path = cover_path if cover_path and os.path.exists(cover_path) else BLANK_PATH
+
+        if not hasattr(self, "_row_pixmap_cache"):
+            self._row_pixmap_cache = {}
+
+        cached = self._row_pixmap_cache.get(cover_path)
+        if cached is not None and not cached.isNull():
+            return cached
+
+        pixmap = QPixmap(cover_path)
+
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(
+                52, 52,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+
+        self._row_pixmap_cache[cover_path] = pixmap
+        return pixmap
 
     def _set_startup_loading_ui(self):
         if self.now_playing_title.text() != None:
@@ -3608,40 +3674,41 @@ class Player(QWidget):
         if not hasattr(self, "song_list"):
             return
 
-        self.song_list.clear()
+        self.song_list.setUpdatesEnabled(False)
+        try:
+            self.song_list.clear()
 
-        indexes = list(range(len(self.songs)))
+            indexes = list(range(len(self.songs)))
 
-        def sort_key(i):
-            return self._library_song_display(i).lower()
+            def sort_key(i):
+                return self._library_song_display(i).lower()
 
-        if self.engine.preset.library_sort_mode != 0:
-            indexes.sort(key=sort_key)
-        
-        for index in indexes:
-            data = self.songs.get(str(index))
-            path = data.get("path") if data else None
+            if self.engine.preset.library_sort_mode != 0:
+                indexes.sort(key=sort_key)
+            
+            for index in indexes:
+                data = self.songs.get(str(index))
+                path = data.get("path") if data else None
 
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, index)
-            item.setSizeHint(QSize(260, 68))
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, index)
+                item.setSizeHint(QSize(260, 68))
 
-            artist = "Unknown Artist"
-            title = self._library_song_display(index)
-            pixmap = QPixmap(BLANK_PATH)
+                artist = "Unknown Artist"
+                title = self._library_song_display(index)
+                pixmap = QPixmap(BLANK_PATH)
 
-            if path and os.path.isfile(path):
-                try:
-                    artist, title, cover_path = self.engine.get_data_for_path(path)
-                    pixmap = QPixmap(
-                        cover_path if cover_path and os.path.exists(cover_path)
-                        else BLANK_PATH
-                    )
-                except Exception:
-                    pixmap = QPixmap(BLANK_PATH)
+                if path and os.path.isfile(path):
+                    try:
+                        artist, title, cover_path = self._get_row_data_cached(index)
+                        pixmap = self._get_row_pixmap_cached(cover_path)
+                    except Exception:
+                        pixmap = QPixmap(BLANK_PATH)
 
-            self.song_list.addItem(item)
-            self.song_list.setItemWidget(item, SongRowWidget(title, artist, pixmap, show_handle=False, row_height=68))
+                self.song_list.addItem(item)
+                self.song_list.setItemWidget(item, SongRowWidget(title, artist, pixmap, show_handle=False, row_height=68))
+        finally:
+            self.song_list.setUpdatesEnabled(True)
 
     def _edit_selected_theme_color(self):
         index = self.theme_color_drop.currentIndex()
@@ -3778,30 +3845,32 @@ class Player(QWidget):
         if not hasattr(self, "queue_list"):
             return
 
-        self.queue_list.clear()
-        self.queue_list.setIconSize(QSize(52, 52))
+        self.queue_list.setUpdatesEnabled(False)
+        try:
+            self.queue_list.clear()
+            self.queue_list.setIconSize(QSize(52, 52))
 
-        for index in self.engine.queue:
-            data = self.songs.get(str(index))
-            path = data.get("path") if data else None
+            for index in self.engine.queue:
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, index)
+                item.setSizeHint(QSize(260, 68))
 
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, index)
-            item.setSizeHint(QSize(260, 68))
+                artist, title, cover_path = self._get_row_data_cached(index)
+                pixmap = self._get_row_pixmap_cached(cover_path)
 
-            artist = "Unknown Artist"
-            title = self._queue_song_name(index)
-            pixmap = QPixmap(BLANK_PATH)
-
-            if path and os.path.isfile(path):
-                try:
-                    artist, title, cover_path = self.engine.get_data_for_path(path)
-                    pixmap = QPixmap(cover_path if cover_path and os.path.exists(cover_path) else BLANK_PATH)
-                except Exception:
-                    pixmap = QPixmap(BLANK_PATH)
-
-            self.queue_list.addItem(item)
-            self.queue_list.setItemWidget(item, SongRowWidget(title, artist, pixmap, show_handle=True, row_height=68))
+                self.queue_list.addItem(item)
+                self.queue_list.setItemWidget(
+                    item,
+                    SongRowWidget(
+                        title,
+                        artist,
+                        pixmap,
+                        show_handle=True,
+                        row_height=68
+                    )
+                )
+        finally:
+            self.queue_list.setUpdatesEnabled(True)
 
     def _analyze_queue_loudness_top_5(self):
         if not self.engine.preset.normalize_audio:
@@ -4851,7 +4920,12 @@ class Player(QWidget):
     def _set_now_playing_info(self, artist: str, title: str):
         self.now_playing_title.setText(title or "Unknown Title")
         self.now_playing_artist.setText(artist or "Unknown Artist")
-        self._apply_title_font_to_song_text_widgets()
+
+        title_font = self._title_font(self._theme_int("title_font_size", 15), True)
+        artist_font = self._title_font(self._theme_int("artist_font_size", 11), True)
+
+        self.now_playing_title.setFont(title_font)
+        self.now_playing_artist.setFont(artist_font)
 
     def _position_slider_moved(self, value):
         full_time = self.position_slider.maximum()
