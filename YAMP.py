@@ -55,6 +55,7 @@ Future Features:
     * Write Fetched Lyrics to file (or cache)
 
 '''
+
 TRANSLATE_AVAILABLE = None
 translate_import_error = None
 from deep_translator import GoogleTranslator
