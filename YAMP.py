@@ -1,63 +1,63 @@
 '''
 Every time I worked on it
-  4-17-26 01:45 AM
-  4-19-26 04:26 PM
-  4-17-26 11:23 PM
-  4-20-26 08:22 PM
-  4-21-26 09:33 PM
-  4-22-26 10:47 PM
-  4-23-26 07:53 PM
-  4-26-26 07:44 PM
-  5-03-26 08:31 PM
-  5-05-26 06:10 PM
-  5-06-26 06:19 PM
-  5-09-26 12:42 PM
-  5-10-26 09:30 PM === Added Translation Support
-  5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
-  5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
-  + Sliders and Translation Bug Fixes
-  5-17-26 12:11 AM === small bug fixes,
-  + Added Queue button (auto queing coming soon), also made the loudness thingy no longer logger.info (its logger.debug)
-  5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
-  + Queue Saving, Windows Remember Position, settings tab
-  + Removed Preset Tab and added to settings
-  + Fixed Slider Backgrounds
-  5-20-26 05:09 PM === Added Theme in Settings, Maybe fixed crashes
-  5-21-26 08:53 PM === Crash Fix, Made Normalize Audio a Toggle
-  1.1.1
-  5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
-  5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
-  5-26-26 06:16 PM === bug fixes, Added Draggable Tabs, Emoji Logs fixed
-  + Queue Slots Draggable, Smooth Scrolling
-  5-27-26 01:47 PM === Queue Slots had .ogg and werent the same name as library, lyrics show current song then load lyrics
-  5-28-26 01:21 AM === VocaDB support
-  5-31-26 09:34 PM === Spotify Font Added
-  6-01-26 06:15 PM === All Font Sizes Can be Changed, Lyrics Fallback shown in Text
+    4-17-26 01:45 AM
+    4-19-26 04:26 PM
+    4-17-26 11:23 PM
+    4-20-26 08:22 PM
+    4-21-26 09:33 PM
+    4-22-26 10:47 PM
+    4-23-26 07:53 PM
+    4-26-26 07:44 PM
+    5-03-26 08:31 PM
+    5-05-26 06:10 PM
+    5-06-26 06:19 PM
+    5-09-26 12:42 PM
+    5-10-26 09:30 PM === Added Translation Support
+    5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
+    5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
+                        + Sliders and Translation Bug Fixes
+    5-17-26 12:11 AM === small bug fixes,
+                        + Added Queue button (auto queing coming soon), also made the loudness thingy no longer logger.info (its logger.debug)
+    5-19-26 07:03 PM === Added Clickable Queue Buttons, simplified imports/startup ram usage
+                        + Queue Saving, Windows Remember Position, settings tab
+                        + Removed Preset Tab and added to settings
+                        + Fixed Slider Backgrounds
+    5-20-26 05:09 PM === Added Theme in Settings, Maybe fixed crashes
+    5-21-26 08:53 PM === Crash Fix, Made Normalize Audio a Toggle
+    1.1.1
+    5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
+    5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
+    5-26-26 06:16 PM === bug fixes, Added Draggable Tabs, Emoji Logs fixed
+                        + Queue Slots Draggable, Smooth Scrolling
+    5-27-26 01:47 PM === Queue Slots had .ogg and werent the same name as library, lyrics show current song then load lyrics
+    5-28-26 01:21 AM === VocaDB support
+    5-31-26 09:34 PM === Spotify Font Added
+    6-01-26 06:15 PM === All Font Sizes Can be Changed, Lyrics Fallback shown in Text
+                        + This Section is Now Not Red in VsCode
+    6-03-26 05:18 PM === Fixed Loading.. at Startup
+    6-05-26 11:06 PM === Made Queue/Libary Show Artist Under The Title
 
 Known Issues:
+    * Translation Not Working on EXE
+    * Images for Queue/Library are shifted down (sorry if I made you notice)
+
+Fixed Issues:
+    * 
+
+Added Features:
     * None
-
-Fixed Issues (last reset, 5-11-26 9:18 PM):
-    * 5-13 The volume and time slider are not draggable (in a sense), just clicking slider only
-    * 5-13 Translation is laggy and completely freeze the program until it finishes (audio still plays)
-    * 5-21 Crashing (I spammed next, then stopped for a moment, most likey cause: Loudness Gain. I got a debug log at the exact time of crash)
-
-Added Features (last reset, 5-11-26 9:18 PM):
-    * Queue
-    * If a song is not playing for a certain amount of time, the lyrics window hides until a song is playing
-    * Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
-    * Tabs Draggable and Order saved
 
 Future Features:
     * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
     * Option to also save song current position/time
     * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
     * Youtube Imbedded Support
+    * Write Fetched Lyrics to file (or cache)
 
 '''
-ARGOS_AVAILABLE = None
-argos_import_error = None
-_argos_translate = None
+TRANSLATE_AVAILABLE = None
+translate_import_error = None
+from deep_translator import GoogleTranslator
 import sys
 import ctypes
 from ctypes import wintypes
@@ -70,7 +70,7 @@ from winrt.windows.storage import StorageFile
 from winrt.windows.storage.streams import RandomAccessStreamReference
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QFrame, QInputDialog, QStyledItemDelegate, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QFrame, QSizePolicy, QInputDialog, QStyledItemDelegate, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon, QFontDatabase
 from dataclasses import dataclass, asdict
@@ -157,14 +157,14 @@ else:
 
 if not os.path.exists(BLANK_PATH):
     try: 
-        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/no_image.png?raw=true", timeout=10) as r:
+        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/files_to_build/no_image.png?raw=true", timeout=10) as r:
             with open(BLANK_PATH, "wb") as f:
                 f.write(r.read())
     except Exception as e:
         logger.warning("🟡 Cant Download Blank Image: %s", e)
 if not os.path.exists(ICON_PATH):
     try:
-        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/icon.png?raw=true", timeout=10) as r:
+        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/files_to_build/icon.png?raw=true", timeout=10) as r:
             with open(ICON_PATH, "wb") as f:
                 f.write(r.read())
     except Exception as e:
@@ -191,35 +191,20 @@ def create_auto_preset():
             json.dump({"preset": {}, "songs": [], "theme": {}}, f, indent=2)
 
 def _load_auto_preset(w) -> None:
-    if not os.path.exists(PRESET_PATH):
-        create_auto_preset()
-        return
+    w._loading_preset = True
     try:
+        if not os.path.exists(PRESET_PATH):
+            create_auto_preset()
+            return
+
         with open(PRESET_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+
         w._apply_preset_to_ui(data)
     except Exception as e:
         logger.warning("🟡 Auto-load failed: %s", e)
-
-def get_argos_translate():
-    global ARGOS_AVAILABLE, argos_import_error, _argos_translate
-
-    if ARGOS_AVAILABLE is True and _argos_translate is not None:
-        return _argos_translate
-
-    if ARGOS_AVAILABLE is False:
-        return None
-
-    try:
-        import argostranslate.translate as translate
-        _argos_translate = translate
-        ARGOS_AVAILABLE = True
-        return _argos_translate
-    except Exception as e:
-        argos_import_error = e
-        ARGOS_AVAILABLE = False
-        logger.debug("🟣🟡 Argos unavailable: %s", e)
-        return None
+    finally:
+        w._loading_preset = False
 
 def smooth_wheel_scroll(widget, event, duration=180):
     sb = widget.verticalScrollBar()
@@ -379,11 +364,16 @@ class LyricsFetcher(QObject):
 
     def fetch(self, artist, title):
         logger.debug("Started Lyrics Fetch (%s - %s)", artist, title)
+        song_looking_for = self.lyric_stuff.engine.get_current_song()
         self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.engine.preset.MUSIXMATCH_USER_TOKEN
 
         tracks = self.search_track(artist, title)
         self.lyric_stuff.engine.player.lyrics_status.setText("Trying Musixmatch...")
         if tracks:
+            new_song = self.lyric_stuff.engine.get_current_song()
+            if new_song != song_looking_for:
+                logger.debug("Fetch failed: song changed")
+                return None
             for item in tracks:
                 track = item.get("track", {})
                 track_id = track.get("track_id")
@@ -422,6 +412,10 @@ class LyricsFetcher(QObject):
             self.fetch_from_vocaloid_wiki,
         ):
             try:
+                new_song = self.lyric_stuff.engine.get_current_song()
+                if new_song != song_looking_for:
+                    logger.debug("Fetch failed: song changed")
+                    return None
                 lyrics = fallback(artist, title)
 
                 if lyrics:
@@ -771,7 +765,6 @@ class LyricsFetcher(QObject):
         logger.debug("VocaDB lyric failed. Data: %r", data)
         return None
 
-
 class ThemeThing(QObject):
     def __init__(self, player):
         super().__init__()
@@ -865,18 +858,21 @@ class ThemeThing(QObject):
         if color.isValid():
             set_theme_value(self, "disabled_text", color.name())
 
-
-class QueueRowWidget(QWidget):
-    def __init__(self, text: str, pixmap: QPixmap | None = None):
+class SongRowWidget(QWidget):
+    def __init__(self, title_text: str, artist_text: str, pixmap: QPixmap | None = None, show_handle=False, row_height=60):
         super().__init__()
+        self.setFixedHeight(row_height)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         cover = QLabel()
-        cover.setFixedSize(48, 48)
+        cover.setFixedSize(52, 52)
         cover.setScaledContents(False)
+        cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         if pixmap and not pixmap.isNull():
             cover.setPixmap(
@@ -887,22 +883,63 @@ class QueueRowWidget(QWidget):
                 )
             )
 
-        layout.addWidget(cover)
+        layout.addWidget(cover, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        title = QLabel(text)
+        self.setObjectName("SongRowWidget")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        self.setStyleSheet("""
+        QWidget#SongRowWidget {
+            background: transparent;
+        }
+        QWidget#SongRowWidget QWidget {
+            background: transparent;
+        }
+        QWidget#SongRowWidget QLabel {
+            background: transparent;
+        }
+        """)
+
+        text_box = QWidget()
+        text_layout = QVBoxLayout(text_box)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(1)
+
+        title = QLabel(title_text)
         title.setObjectName("QueueRowTitle")
         title.setStyleSheet("background: transparent;")
-        title.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        title.setFont(self.parent().font() if self.parent() else QFont())
         title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        layout.addWidget(title, 1)
 
-        handle = QLabel("☰")
-        handle.setFixedSize(28, 48)
-        handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        handle.setCursor(Qt.CursorShape.OpenHandCursor)
-        handle.setStyleSheet("background: transparent; font-size: 18px;")
+        artist = QLabel(artist_text)
+        artist.setObjectName("MutedLabel")
+        artist.setStyleSheet("""
+            background: transparent;
+            color: #9ca3af;
+        """)
+        artist.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
-        layout.addWidget(handle)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(0)
+        text_layout.addStretch(1)
+        text_layout.addWidget(title)
+        text_layout.addWidget(artist)
+        text_layout.addStretch(1)
+
+        layout.addWidget(text_box, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        if show_handle:
+            handle = QLabel("☰")
+            handle.setFixedSize(28, 52)
+            handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            handle.setCursor(Qt.CursorShape.OpenHandCursor)
+            handle.setStyleSheet("""
+                background: transparent;
+                font-size: 18px;
+                padding: 0px;
+                margin: 0px;
+            """)
+            layout.addWidget(handle, 0, Qt.AlignmentFlag.AlignVCenter)
 
 class QueueListWidget(QListWidget):
     deletePressed = Signal()
@@ -1025,7 +1062,7 @@ class Preset:
     lyrics_window_geometry: dict | None = None
     floating_window_geometry: dict | None = None
     muted: bool = False
-    shuffle: bool = False
+    shuffle: bool = True
     repeat: bool = False
     current_song: int = 0
     volume: float = 100
@@ -1035,10 +1072,11 @@ class Preset:
     floating_lyrics_on_top: bool = False
     romaji: bool = False
     translated: bool = False
-    library_sort_mode: int = 0
-    library_show_images: bool = False
+    library_sort_mode: int = 2
+    library_show_images: bool = True
     normalize_audio: bool = True
     online_lyrics: bool = True
+    download_lyrics: bool = True
     MUSIXMATCH_USER_TOKEN: str = ''
     queue: list[int] | None = None
     tab_order: list[str] | None = None
@@ -1541,11 +1579,7 @@ class LyricStuff(QObject):
         return "\n".join(output)
 
     def translate_lrc_lines(self, text: str, target: str = "en") -> str:
-        argos_translate = get_argos_translate()
-
-        if argos_translate is None:
-            logger.warning("🟡 Argos unavailable: %s", argos_import_error)
-            return text
+        self.engine.player.lyrics_status.setText("Translating...")
         cache_key = (target, text)
 
         cached = self.translation_cache.get(cache_key)
@@ -1588,28 +1622,12 @@ class LyricStuff(QObject):
                 return None
 
             try:
-                installed_languages = argos_translate.get_installed_languages()
-
-                from_lang = next(
-                    (lang for lang in installed_languages if lang.code == source),
-                    None
-                )
-                to_lang = next(
-                    (lang for lang in installed_languages if lang.code == target),
-                    None
+                translator = GoogleTranslator(
+                    source=source,
+                    target=target
                 )
 
-                if from_lang is None or to_lang is None:
-                    logger.debug("🟣🟡 Translation pair unavailable: %s -> %s", source, target)
-                    return None
-
-                translation = from_lang.get_translation(to_lang)
-
-                if translation is None:
-                    logger.debug("🟣🟡 Translation pair unavailable: %s -> %s", source, target)
-                    return None
-
-                translated = translation.translate(raw)
+                translated = translator.translate(raw)
 
             except Exception as e:
                 logger.warning("🟡 Translation failed: %s", e)
@@ -1674,7 +1692,15 @@ class LyricStuff(QObject):
                 if self.engine.preset.online_lyrics:
                     logger.debug("Using LyricsFetcher for %s - %s", artist, title)
                     lyrics = self.LyricsFetcher.fetch(artist, title)
-                    if not lyrics:
+                    if lyrics:
+                        if self.engine.preset.download_lyrics:
+                            logger.info("🔵 Downloading lyrics for %s - %s", artist, title)
+                            download_path = self.engine.get_current_song()
+                            download_path = os.path.dirname(download_path)
+                            lyric_path = os.path.join(download_path, f" {artist} - {title}.lrc")
+                            with open(lyric_path, "w", encoding="utf-8") as f:
+                                f.write(lyrics)
+                    else:
                         return {
                             "timed": False,
                             "lyrics": [{"time": None, "text": f"{artist} - {title}"}]
@@ -1924,6 +1950,7 @@ class Audio(QObject):
         self.target_lufs = -14.0
         self.normalize_audio = self.preset.normalize_audio
         self.online_lyrics = self.preset.online_lyrics
+        self.download_lyrics = self.preset.download_lyrics
         self.queue_auto_enabled = True
 
         self._session = self.audio_player.playback_session
@@ -2682,6 +2709,7 @@ class Audio(QObject):
 
 class Player(QWidget):
     def __init__(self) -> None:
+        print("Starting...")
         super().__init__()
         os.system('cls')
         self.engine = Audio(self)
@@ -2706,6 +2734,13 @@ class Player(QWidget):
         self._lyrics_load_timer = QTimer(self)
         self._lyrics_load_timer.setSingleShot(True)
         self._lyrics_load_timer.timeout.connect(self._load_lyrics_for_current_song_now)
+        self.tab_order = [
+            "Player",
+            "Lyrics",
+            "Queue",
+            "Library",
+            "Settings"
+        ]
 
         self.setWindowTitle(f"Yet Another Music Player - {PROFILE_NAME}")
         self.setWindowIcon(QIcon(ICON_PATH))
@@ -2790,6 +2825,7 @@ class Player(QWidget):
         
         self.settings_normalize_audio_cb = QCheckBox("Normalize Audio")
         self.settings_online_lyrics_cb = QCheckBox("Online Lyrics")
+        self.settings_download_lyrics_cb = QCheckBox("Download Lyrics")
         self.settings_MUSIXMATCH_USER_TOKEN_text = QLineEdit("Paste your MUSIXMATCH user token here")
 
         self.edit_theme_font_size_btn = QPushButton("Edit Font Size")
@@ -2959,7 +2995,7 @@ class Player(QWidget):
         self.queue_list = QueueListWidget(self)
         self.queue_list.setObjectName("QueueList")
         self.queue_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.queue_list.setItemDelegate(QueueItemDelegate())
+        #self.queue_list.setItemDelegate(QueueItemDelegate())
 
         queue_buttons = QHBoxLayout()
         self.add_to_queue_btn = QPushButton("Refresh Queue")
@@ -3101,6 +3137,7 @@ class Player(QWidget):
 
         settings_lyrics_layout_1 = QHBoxLayout()
         settings_lyrics_layout_1.addWidget(self.settings_online_lyrics_cb)
+        settings_lyrics_layout_1.addWidget(self.settings_download_lyrics_cb)
         settings_lyrics_layout_1.addStretch()
 
         settings_lyrics_layout_2 = QHBoxLayout()
@@ -3367,6 +3404,8 @@ class Player(QWidget):
         # Lyrics
         self.settings_online_lyrics_cb.setChecked(self.engine.preset.online_lyrics)
         self.settings_online_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
+        self.settings_download_lyrics_cb.setChecked(self.engine.preset.download_lyrics)
+        self.settings_download_lyrics_cb.stateChanged.connect(self._apply_ui_to_engine)
         self.settings_MUSIXMATCH_USER_TOKEN_text.setText(self.engine.preset.MUSIXMATCH_USER_TOKEN)
         self.settings_MUSIXMATCH_USER_TOKEN_text.textChanged.connect(self._apply_ui_to_engine)
         # Queue
@@ -3392,6 +3431,13 @@ class Player(QWidget):
                 text = QFontDatabase.applicationFontFamilies(font_id)
                 logger.debug(f"🟣 Loaded: {font_file.name} %s", text)
         apply_theme(QApplication.instance(), {"theme": self.current_theme})
+
+    def _set_startup_loading_ui(self):
+        if self.now_playing_title.text() != None:
+            return
+        self.now_playing_title.setText("Loading...")
+        self.now_playing_artist.setText("Loading...")
+        self.setWindowTitle("Yet Another Music Player - Loading...")
 
     def _title_font(self, point_size: int | None = None, bold: bool = False) -> QFont:
         font = QFont(self._title_font_family())
@@ -3525,6 +3571,9 @@ class Player(QWidget):
                 return
 
     def _library_settings_changed(self):
+        if getattr(self, "_loading_preset", False):
+            return
+
         self.engine.preset.library_sort_mode = self.library_sort_drop.currentIndex()
         self.engine.preset.library_show_images = self.library_images_cb.isChecked()
 
@@ -3567,32 +3616,31 @@ class Player(QWidget):
 
         if self.engine.preset.library_sort_mode != 0:
             indexes.sort(key=sort_key)
-
+        
         for index in indexes:
             data = self.songs.get(str(index))
             path = data.get("path") if data else None
 
-            item = QListWidgetItem(self._library_song_display(index))
-            item.setFont(self._title_font(bold=True))
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, index)
+            item.setSizeHint(QSize(260, 68))
 
-            if self.engine.preset.library_show_images:
-                item.setSizeHint(QSize(260, 60))
+            artist = "Unknown Artist"
+            title = self._library_song_display(index)
+            pixmap = QPixmap(BLANK_PATH)
 
-                icon_path = BLANK_PATH
+            if path and os.path.isfile(path):
+                try:
+                    artist, title, cover_path = self.engine.get_data_for_path(path)
+                    pixmap = QPixmap(
+                        cover_path if cover_path and os.path.exists(cover_path)
+                        else BLANK_PATH
+                    )
+                except Exception:
+                    pixmap = QPixmap(BLANK_PATH)
 
-                if path and os.path.isfile(path):
-                    try:
-                        artist, title, cover_path = self.engine.get_data_for_path(path)
-
-                        if cover_path and os.path.exists(cover_path):
-                            icon_path = cover_path
-
-                    except Exception as e:
-                        logger.warning("🟡 Library cover load failed: %s", e)
-
-                item.setIcon(QIcon(icon_path))
             self.song_list.addItem(item)
+            self.song_list.setItemWidget(item, SongRowWidget(title, artist, pixmap, show_handle=False, row_height=68))
 
     def _edit_selected_theme_color(self):
         index = self.theme_color_drop.currentIndex()
@@ -3736,22 +3784,23 @@ class Player(QWidget):
             data = self.songs.get(str(index))
             path = data.get("path") if data else None
 
-            item = QListWidgetItem(f"{self._queue_song_name(index)}")
-            item.setFont(self._title_font(bold=True))
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, index)
             item.setSizeHint(QSize(260, 68))
 
-            icon_path = BLANK_PATH
+            artist = "Unknown Artist"
+            title = self._queue_song_name(index)
+            pixmap = QPixmap(BLANK_PATH)
 
             if path and os.path.isfile(path):
                 try:
                     artist, title, cover_path = self.engine.get_data_for_path(path)
-                    icon_path = cover_path
+                    pixmap = QPixmap(cover_path if cover_path and os.path.exists(cover_path) else BLANK_PATH)
                 except Exception:
-                    icon_path = BLANK_PATH
+                    pixmap = QPixmap(BLANK_PATH)
 
-            item.setIcon(QIcon(icon_path))
             self.queue_list.addItem(item)
+            self.queue_list.setItemWidget(item, SongRowWidget(title, artist, pixmap, show_handle=True, row_height=68))
 
     def _analyze_queue_loudness_top_5(self):
         if not self.engine.preset.normalize_audio:
@@ -4938,6 +4987,7 @@ class Player(QWidget):
                 self.settings_normalize_audio_cb,
 
                 self.settings_online_lyrics_cb,
+                self.settings_download_lyrics_cb,
                 self.settings_MUSIXMATCH_USER_TOKEN_text,
 
                 self.volume_slider,
@@ -4978,6 +5028,7 @@ class Player(QWidget):
             self.library_images_cb.setChecked(bool(p.library_show_images))
             self.settings_normalize_audio_cb.setChecked(bool(p.normalize_audio))
             self.settings_online_lyrics_cb.setChecked(bool(p.online_lyrics))
+            self.settings_download_lyrics_cb.setChecked(bool(p.download_lyrics))
             self.settings_MUSIXMATCH_USER_TOKEN_text.setText(str(p.MUSIXMATCH_USER_TOKEN))
             self.tab_order = p.tab_order
 
@@ -5009,13 +5060,15 @@ class Player(QWidget):
 
             self.engine.online_lyrics = p.online_lyrics
             self.engine.preset.online_lyrics = p.online_lyrics
+            self.engine.download_lyrics = p.download_lyrics
+            self.engine.preset.download_lyrics = p.download_lyrics
             self.engine.preset.normalize_audio = p.normalize_audio
             self.engine.normalize_audio = p.normalize_audio
 
             self.engine.lyrics.MUSIXMATCH_USER_TOKEN = p.MUSIXMATCH_USER_TOKEN
             self._update_tab_order()
-            self._library_settings_changed()
-            self._fill_queue()
+            QTimer.singleShot(100, self._library_settings_changed)
+            QTimer.singleShot(300, self._fill_queue)
 
         finally:
             self._loading_ui = False
@@ -5025,7 +5078,12 @@ class Player(QWidget):
     def _apply_ui_to_engine(self) -> None:
         if getattr(self, "_loading_ui", False):
             return
-
+        try:
+            sender = self.sender()
+            obj = sender.text()
+            logger.debug(f"{obj} Changed")
+        except:
+            pass
         p = self.engine.preset
         p.show_console = self.show_console_cb.isChecked()
         p.logging_level = self.logging_level_drop.currentIndex()
@@ -5044,10 +5102,12 @@ class Player(QWidget):
         p.queue = list(self.engine.queue)
         p.normalize_audio = self.settings_normalize_audio_cb.isChecked()
         p.online_lyrics = self.settings_online_lyrics_cb.isChecked()
+        p.download_lyrics = self.settings_download_lyrics_cb.isChecked()
         p.MUSIXMATCH_USER_TOKEN = self.settings_MUSIXMATCH_USER_TOKEN_text.text()
         p.tab_order = self.tab_order
 
         self.engine.online_lyrics = p.online_lyrics
+        self.engine.download_lyrics = p.download_lyrics
         self.engine.normalize_audio = p.normalize_audio
         self.engine.set_shuffle(p.shuffle)
         self.engine.set_repeat(p.repeat)
@@ -5095,6 +5155,9 @@ QWidget {{
     color: {text};
     font-family: "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
     font-size: {normal_font_size}pt;
+}}
+QWidget#SongRowWidget {{
+    background: transparent;
 }}
 
 /* Tabs */
@@ -5300,6 +5363,7 @@ QListWidget#LyricsList::item {{
 QLabel {{
     color: {text};
     background-color: transparent;
+    background: transparent;
 }}
 
 QLabel#SongTitle {{
@@ -5422,5 +5486,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = Player()
     _load_auto_preset(w)
+    if w.song_list.count() > 0:
+        w._set_startup_loading_ui()
     w.show()
     sys.exit(app.exec())
