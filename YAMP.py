@@ -1,17 +1,18 @@
+#region Changelog
 '''
 Every time I worked on it
-    4-17-26 01:45 AM
-    4-19-26 04:26 PM
-    4-17-26 11:23 PM
-    4-20-26 08:22 PM
-    4-21-26 09:33 PM
-    4-22-26 10:47 PM
-    4-23-26 07:53 PM
-    4-26-26 07:44 PM
-    5-03-26 08:31 PM
-    5-05-26 06:10 PM
-    5-06-26 06:19 PM
-    5-09-26 12:42 PM
+    4-17-26 01:45 AM === Made Changelog, unknown
+    4-19-26 04:26 PM === unknown
+    4-17-26 11:23 PM === unknown
+    4-20-26 08:22 PM === unknown
+    4-21-26 09:33 PM === unknown
+    4-22-26 10:47 PM === unknown
+    4-23-26 07:53 PM === unknown
+    4-26-26 07:44 PM === unknown
+    5-03-26 08:31 PM === unknown
+    5-05-26 06:10 PM === unknown
+    5-06-26 06:19 PM === unknown
+    5-09-26 12:42 PM === unknown
     5-10-26 09:30 PM === Added Translation Support
     5-11-26 09:18 PM === Added Console Support for EXE, miscellaneous fixes
     5-13-26 09:11 PM === Fixed Translation with EXE, Added Audio Normalization, small bug fixes
@@ -24,7 +25,9 @@ Every time I worked on it
                         + Fixed Slider Backgrounds
     5-20-26 05:09 PM === Added Theme in Settings, Maybe fixed crashes
     5-21-26 08:53 PM === Crash Fix, Made Normalize Audio a Toggle
+    
     1.1.1
+
     5-24-26 10:09 PM === bug fixes, started working on youtube imbedded support and it wont be added anytime soon
     5-25-26 03:33 PM === Added Musixmatch, LRCLIB, Lyrics.ohv, and Vocaloid Wiki Lyrics Support
     5-26-26 06:16 PM === bug fixes, Added Draggable Tabs, Emoji Logs fixed
@@ -37,11 +40,11 @@ Every time I worked on it
     6-03-26 05:18 PM === Fixed Loading.. at Startup
     6-05-26 11:06 PM === Made Queue/Libary Show Artist Under The Title
                         + Optimized Slots
+    6-08-26 10:17 PM === Organized Code, Made Online Lyrics in Thread, auto font download
 
 Known Issues:
     * Translation Not Working on EXE
-    * Images for Queue/Library are shifted down (sorry if I made you notice)
-    * Just found out that it takes like 2 secs to load a song instead of instant
+    * Images for Queue/Library are shifted down
 
 Fixed Issues:
     * 
@@ -57,6 +60,9 @@ Future Features:
     * Write Fetched Lyrics to file (or cache)
 
 '''
+#endregion
+
+#region Imports
 TRANSLATE_AVAILABLE = None
 translate_import_error = None
 from deep_translator import GoogleTranslator
@@ -90,26 +96,26 @@ from datetime import timedelta
 import re
 import hashlib
 import logging
-
 LIB_AND_PYLN_IMPORTED = False
-KAKASI_IMPORTED = False
+#endregion
+
 player_ver = "1.2"
 
-APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
-APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
-FONT_DIR = Path(APPDATA_DIR) / "fonts"
-SETTINGS_PATH = os.path.join(APPDATA_DIR, "settings.json")
-BLANK_PATH = os.path.join(APPDATA_DIR, "blank.png")
-ICON_PATH = os.path.join(APPDATA_DIR, "icon.png")
-LOG_PATH = os.path.join(APPDATA_DIR, "player.log")
-cover_path = BLANK_PATH
-os.makedirs(APPDATA_DIR, exist_ok=True)
-# Logger thingys
+
+if getattr(sys, 'frozen', False):
+    runningpy = False
+else:
+    runningpy = True 
+
+#region Logging setup
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
 logger.handlers.clear()
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
+APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
+LOG_PATH = os.path.join(APPDATA_DIR, "player.log")
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
@@ -134,7 +140,6 @@ def _console_ctrl_handler(ctrl_type):
 ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 handle = kernel32.GetStdHandle(-11)
 mode = ctypes.c_uint()
-
 if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
     kernel32.SetConsoleMode(
         handle,
@@ -144,7 +149,31 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+class ConsoleCloseBridge(QObject):
+    closed = Signal()
+console_close_bridge = ConsoleCloseBridge()
+class COORD(ctypes.Structure):
+    _fields_ = [
+        ("X", ctypes.c_short),
+        ("Y", ctypes.c_short),
+    ]
 
+class CONSOLE_FONT_INFOEX(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("nFont", ctypes.c_ulong),
+        ("dwFontSize", COORD),
+        ("FontFamily", ctypes.c_uint),
+        ("FontWeight", ctypes.c_uint),
+        ("FaceName", wintypes.WCHAR * 32),
+    ]
+#endregion
+
+#region Paths Setup
+FONT_DIR = Path(APPDATA_DIR) / "fonts"
+SETTINGS_PATH = os.path.join(APPDATA_DIR, "settings.json")
+BLANK_PATH = os.path.join(APPDATA_DIR, "blank.png")
+ICON_PATH = os.path.join(APPDATA_DIR, "icon.png")
 if not os.path.exists(SETTINGS_PATH):
     with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
         json.dump({"Current Preset": "Default"}, f, indent=2)
@@ -156,6 +185,14 @@ else:
         data = json.load(f)
 
     PROFILE_NAME = data.get("Current Preset", "Default")
+PROFILE_DIR = os.path.join(APPDATA_DIR, PROFILE_NAME)
+TEMP_DIR = os.path.join(PROFILE_DIR, "Temp")
+PRESET_PATH = os.path.join(PROFILE_DIR, "preset.json")
+cover_path = BLANK_PATH
+os.makedirs(PROFILE_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs(APPDATA_DIR, exist_ok=True)
+
 
 if not os.path.exists(BLANK_PATH):
     try: 
@@ -171,20 +208,54 @@ if not os.path.exists(ICON_PATH):
                 f.write(r.read())
     except Exception as e:
         logger.warning("🟡 Cant Download Icon Image: %s", e)
+#fonts
+try:
+    FONT_NAMES = [
+        "SpotifyMixUI-Bold.ttf",
+        "SpotifyMixUI-Regular.ttf",
+        "SpotifyMixUITitle-Bold.ttf",
+        "SpotifyMixUITitle-Extrabold.ttf",
+        "SpotifyMixUITitleVariable.ttf",
+    ]
 
-if getattr(sys, 'frozen', False):
-    runningpy = False
-else:
-    runningpy = True 
+    os.makedirs(FONT_DIR, exist_ok=True)
+    missing_fonts = [
+        name for name in FONT_NAMES
+        if not os.path.exists(os.path.join(FONT_DIR, name))
+    ]
 
+    if missing_fonts:
+        logger.warning("🟡 Missing fonts: %s", missing_fonts)
+        for name in os.listdir(FONT_DIR):
+            path = os.path.join(FONT_DIR, name)
 
-PROFILE_DIR = os.path.join(APPDATA_DIR, PROFILE_NAME)
-TEMP_DIR = os.path.join(PROFILE_DIR, "Temp")
-PRESET_PATH = os.path.join(PROFILE_DIR, "preset.json")
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception as e:
+                logger.warning("🟡 Cant Remove Font File: %s", e)
+        for name in FONT_NAMES:
+            url = (
+                "https://github.com/errorC003C004/Yet-Another-Music-Player"
+                f"/blob/main/files_to_build/fonts/{quote(name)}?raw=true"
+            )
 
-os.makedirs(PROFILE_DIR, exist_ok=True)
-os.makedirs(TEMP_DIR, exist_ok=True)
+            path = os.path.join(FONT_DIR, name)
 
+            try:
+                logger.debug("Downloading font: %s", name)
+
+                with urlopen(url, timeout=10) as r:
+                    with open(path, "wb") as out:
+                        out.write(r.read())
+
+            except Exception as e:
+                logger.warning("🟡 Cant Download Font %s: %s", name, e)
+except Exception as e:
+    logger.warning("🟡 Cant Download Fonts: %s", e)
+#endregion
+
+#region Preset
 def create_auto_preset():
     os.makedirs(PROFILE_DIR, exist_ok=True)
 
@@ -207,7 +278,10 @@ def _load_auto_preset(w) -> None:
         logger.warning("🟡 Auto-load failed: %s", e)
     finally:
         w._loading_preset = False
+#endregion
 
+
+#region Helpers/Smthn
 def smooth_wheel_scroll(widget, event, duration=180):
     sb = widget.verticalScrollBar()
 
@@ -235,849 +309,9 @@ def smooth_wheel_scroll(widget, event, duration=180):
     anim.start()
 
     event.accept()
+#endregion
 
-class ConsoleCloseBridge(QObject):
-    closed = Signal()
-console_close_bridge = ConsoleCloseBridge()
-
-class LibraryListWidget(QListWidget):
-    deletePressed = Signal()
-    selectAllPressed = Signal()
-
-    def __init__(self):
-        super().__init__()
-        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-
-    def wheelEvent(self, event):
-        smooth_wheel_scroll(self, event)
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Delete:
-            self.deletePressed.emit()
-            return
-
-        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
-            self.selectAll()
-            self.selectAllPressed.emit()
-            return
-
-        super().keyPressEvent(event)
-
-class JumpSlider(QSlider):
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            value = QStyle.sliderValueFromPosition(
-                self.minimum(),
-                self.maximum(),
-                int(event.position().x()),
-                self.width()
-            )
-
-            self.setValue(value)
-            self.sliderPressed.emit()
-            self.sliderMoved.emit(value)
-
-        super().mousePressEvent(event)
-
-class LoudnessWorker(QObject):
-    finished = Signal(str, float)
-    failed = Signal(str, str)
-
-    def __init__(self, path: str, target_lufs: float):
-        super().__init__()
-        self.path = path
-        self.target_lufs = target_lufs
-
-    def run(self):
-        try:
-            from librosa import load as lload
-            import pyloudnorm as pyln
-
-            data, rate = lload(self.path, sr=None, mono=True)
-
-            meter = pyln.Meter(rate)
-            loudness = meter.integrated_loudness(data)
-
-            gain_db = self.target_lufs - loudness
-            self.finished.emit(self.path, gain_db)
-
-        except Exception as e:
-            self.failed.emit(self.path, str(e))
-
-class LyricsWorker(QObject):
-    finished = Signal(dict)
-    failed = Signal(str)
-
-    def __init__(self, lyric_stuff):
-        super().__init__()
-        self.lyric_stuff = lyric_stuff
-
-    def run(self):
-        try:
-            data = self.lyric_stuff.convert_lyrics()
-            self.finished.emit(data)
-        except Exception as e:
-            self.failed.emit(str(e))
-
-class LyricsResultBridge(QObject):
-    loaded = Signal(dict, int, str)
-    failed = Signal(str, int, str)
-
-class LyricsFetcher(QObject):
-    def __init__(self, LyricStuff):
-        super().__init__()
-        self.lyric_stuff = LyricStuff
-        self.SEARCH_HEADERS = {
-            "user-agent": "Mozilla/5.0",
-            "accept": "application/json",
-            "origin": "https://www.musixmatch.com",
-            "referer": "https://www.musixmatch.com/",
-        }
-
-        self.LYRICS_HEADERS = {
-            "user-agent": "Mozilla/5.0",
-        }
-
-    def _get_json(self, url, params=None, headers=None, timeout=10):
-        if params:
-            query = urlencode(params, quote_via=quote)
-            url = f"{url}?{query}"
-
-        req = Request(url, headers=headers or {}, method="GET")
-
-        try:
-            with urlopen(req, timeout=timeout) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-                logger.debug("Lyrics Response: %s", raw[:300])
-                return json.loads(raw)
-
-        except HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            logger.debug(f"HTTP error: {e.code} {e.reason}")
-            logger.debug("DEBUG BODY: %s", body[:300])
-
-        except URLError as e:
-            logger.debug(f"URL error: {e.reason}")
-
-        except json.JSONDecodeError as e:
-            logger.debug(f"JSON error: {e}")
-
-        return {}
-
-    def fetch(self, artist, title):
-        logger.debug("Started Lyrics Fetch (%s - %s)", artist, title)
-        song_looking_for = self.lyric_stuff.engine.get_current_song()
-        self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.engine.preset.MUSIXMATCH_USER_TOKEN
-
-        tracks = self.search_track(artist, title)
-        self.lyric_stuff.engine.player.lyrics_status.setText("Trying Musixmatch...")
-        if tracks:
-            new_song = self.lyric_stuff.engine.get_current_song()
-            if new_song != song_looking_for:
-                logger.debug("Fetch failed: song changed")
-                return None
-            for item in tracks:
-                track = item.get("track", {})
-                track_id = track.get("track_id")
-
-                has_lyrics = track.get("has_lyrics")
-                has_subtitles = track.get("has_subtitles")
-
-                if not has_lyrics and not has_subtitles:
-                    logger.debug(
-                        "Skipping no-lyrics result: %s - %s",
-                        track.get("artist_name"),
-                        track.get("track_name"),
-                    )
-                    continue
-
-                if not track_id:
-                    continue
-
-                logger.debug("Trying: %s - %s", track.get("artist_name"), track.get("track_name"))
-
-                lyrics = self.get_lyrics(track_id)
-
-                if lyrics:
-                    logger.debug("🟣 Lyrics found")
-                    return lyrics
-        else:
-            logger.debug("No Musixmatch results found.")
-
-        logger.debug("Trying fallback providers...")
-        self.lyric_stuff.engine.player.lyrics_status.setText("Trying fallback...")
-
-        for fallback in (
-            self.fetch_from_lrclib,
-            self.fetch_from_lyrics_ovh,
-            self.fetch_from_vocadb,
-            self.fetch_from_vocaloid_wiki,
-        ):
-            try:
-                new_song = self.lyric_stuff.engine.get_current_song()
-                if new_song != song_looking_for:
-                    logger.debug("Fetch failed: song changed")
-                    return None
-                lyrics = fallback(artist, title)
-
-                if lyrics:
-                    logger.debug("🟣 Lyrics found from fallback: %s", fallback.__name__)
-                    return lyrics
-
-            except Exception as e:
-                logger.warning("🟡 Fallback failed (%s): %s", fallback.__name__, e)
-
-        logger.debug("No lyrics found.")
-        return None
-
-    def search_track(self, artist, title):
-        url = "https://apic-desktop.musixmatch.com/ws/1.1/track.search"
-
-        params = {
-            "q_artist": artist,
-            "q_track": title,
-            "page_size": 5,
-            "s_track_rating": "desc",
-            "app_id": "web-desktop-app-v1.0",
-            "usertoken": self.MUSIXMATCH_USER_TOKEN,
-        }
-
-        data = self._get_json(url, params=params, headers=self.SEARCH_HEADERS)
-
-        if not isinstance(data, dict):
-            return []
-
-        message = data.get("message")
-        if not isinstance(message, dict):
-            return []
-
-        body = message.get("body")
-        if not isinstance(body, dict):
-            return []
-
-        track_list = body.get("track_list")
-        if isinstance(track_list, list):
-            return track_list
-
-        return []
-
-    def get_lyrics(self, track_id):
-        endpoints = [
-            ("track.subtitle.get", "subtitle", "subtitle_body", {"subtitle_format": "lrc"}),
-            ("track.lyrics.get", "lyrics", "lyrics_body", {}),
-        ]
-
-        for endpoint_name, body_key, text_key, extra_params in endpoints:
-            url = f"https://apic-desktop.musixmatch.com/ws/1.1/{endpoint_name}"
-
-            params = {
-                "track_id": track_id,
-                "app_id": "web-desktop-app-v1.0",
-                "usertoken": self.MUSIXMATCH_USER_TOKEN,
-                **extra_params,
-            }
-
-            data = self._get_json(url, params=params, headers=self.LYRICS_HEADERS)
-
-            if not isinstance(data, dict):
-                continue
-
-            message = data.get("message")
-            if not isinstance(message, dict):
-                continue
-
-            header = message.get("header")
-            if not isinstance(header, dict):
-                header = {}
-
-            status_code = header.get("status_code")
-            if status_code != 200:
-                logger.debug("%s failed. Status: %s", endpoint_name, status_code)
-                continue
-
-            body = message.get("body")
-            if not isinstance(body, dict):
-                logger.debug("%s returned non-dict body: %r", endpoint_name, body)
-                continue
-
-            lyrics_obj = body.get(body_key)
-            if not isinstance(lyrics_obj, dict):
-                logger.debug("%s returned non-dict %s: %r", endpoint_name, body_key, lyrics_obj)
-                continue
-
-            lyrics = lyrics_obj.get(text_key)
-            if isinstance(lyrics, str) and lyrics.strip():
-                return lyrics.split("*******")[0].strip()
-
-        return None
-
-    def clean_wiki_text(self, text: str):
-        text = re.sub(r"\{\{[^{}]*\}\}", "", text)
-        text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)
-        text = re.sub(r"==+.*?==+", "", text)
-        return text.strip()
-
-    def fetch_from_lrclib(self, artist, title):
-        logger.debug("Trying LRCLIB...")
-        self.lyric_stuff.engine.player.lyrics_status.setText("Trying LRCLIB...")
-        url = "https://lrclib.net/api/search"
-
-        params = {
-            "artist_name": artist,
-            "track_name": title,
-        }
-
-        data = self._get_json(url, params=params)
-
-        if not isinstance(data, list) or not data:
-            return None
-
-        best = data[0]
-
-        synced = best.get("syncedLyrics")
-        plain = best.get("plainLyrics")
-
-        if isinstance(synced, str) and synced.strip():
-            logger.debug("Fallback success: LRCLIB synced")
-            return synced.strip()
-
-        if isinstance(plain, str) and plain.strip():
-            logger.debug("Fallback success: LRCLIB plain")
-            return plain.strip()
-
-        logger.debug("Fallback failed: LRCLIB")
-        return None
-
-    def fetch_from_lyrics_ovh(self, artist, title):
-        logger.debug("Trying lyrics.ovh...")
-        self.lyric_stuff.engine.player.lyrics_status.setText("Trying lyrics.ovh...")
-        url = f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}"
-
-        data = self._get_json(url)
-
-        if not isinstance(data, dict):
-            return None
-
-        lyrics = data.get("lyrics")
-
-        if isinstance(lyrics, str) and lyrics.strip():
-            logger.debug("Fallback success: lyrics.ovh")
-            return lyrics.strip()
-
-        logger.debug("Fallback failed: lyrics.ovh")
-        return None
-
-    def fetch_from_vocaloid_wiki(self, artist, title):
-        logger.debug("Trying Vocaloid Wiki...")
-        self.lyric_stuff.engine.player.lyrics_status.setText("Trying Vocaloid Wiki...")
-        url = "https://vocaloidlyrics.miraheze.org/w/api.php"
-
-        params = {
-            "action": "query",
-            "prop": "revisions",
-            "rvprop": "content",
-            "rvslots": "main",
-            "titles": title,
-            "format": "json",
-            "formatversion": 2,
-        }
-
-        data = self._get_json(url, params=params)
-
-        if not isinstance(data, dict):
-            return None
-
-        pages = data.get("query", {}).get("pages", [])
-
-        if not pages:
-            return None
-
-        page = pages[0]
-
-        if page.get("missing"):
-            return None
-
-        revisions = page.get("revisions")
-
-        if not revisions:
-            return None
-
-        text = revisions[0]["slots"]["main"]["content"]
-        text = self.clean_wiki_text(text)
-
-        if len(text) > 50:
-            logger.debug("Fallback success: Vocaloid Wiki")
-            return text.strip()
-
-        logger.debug("Fallback failed: Vocaloid Wiki")
-        return None
-
-    def _get_text(self, url, headers=None, timeout=10):
-        req = Request(url, headers=headers or {"user-agent": "Mozilla/5.0"}, method="GET")
-
-        try:
-            with urlopen(req, timeout=timeout) as response:
-                return response.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            logger.debug("Text fetch failed: %s", e)
-            return ""
-
-    def fetch_vocadb_lyrics_id_from_page(self, song_id):
-        text = self._get_text(f"https://vocadb.net/api/songs/{song_id}")
-        try:
-            song = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-
-        ids_to_try = [song_id]
-        original_id = song.get("originalVersionId")
-        if original_id:
-            ids_to_try.append(original_id)
-
-        for sid in ids_to_try:
-            text = self._get_text(
-                f"https://vocadb.net/api/songs?query=id:{sid}&fields=lyrics&maxResults=1"
-            )
-
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
-                continue
-
-            items = data.get("items") or []
-            if not items:
-                continue
-
-            lyrics = items[0].get("lyrics") or []
-            if lyrics:
-                lyrics_id = int(lyrics[0]["id"])
-                logger.debug("Found VocaDB lyricsId from API: %s", lyrics_id)
-                return lyrics_id
-        html = self._get_text(f"https://vocadb.net/S/{song_id}/lyrics?lyricsId=")
-
-        match = re.search(r'lyricsId=(\d+)', html)
-        if match:
-            return int(match.group(1))
-
-        logger.debug("Could not find VocaDB lyricsId for song %s", song_id)
-        return None
-
-    def fetch_from_vocadb(self, artist, title):
-        logger.debug("Trying VocaDB...")
-        self.lyric_stuff.engine.player.lyrics_status.setText("Trying VocaDB...")
-
-        search_queries = [
-            f"{artist} {title}",
-            title,
-            re.sub(r"\s*-\s*", " ", title),
-            re.sub(r"\s*\(.*?\)\s*", " ", title).strip(),
-        ]
-
-        seen = set()
-
-        for query in search_queries:
-            query = " ".join(query.split())
-
-            if not query or query in seen:
-                continue
-
-            seen.add(query)
-
-            url = "https://vocadb.net/api/songs"
-
-            params = {
-                "query": query,
-                "maxResults": 10,
-                "fields": "Lyrics",
-                "nameMatchMode": "Auto",
-            }
-
-            data = self._get_json(url, params=params)
-
-            if not isinstance(data, dict):
-                continue
-
-            items = data.get("items")
-
-            if not isinstance(items, list) or not items:
-                logger.debug("VocaDB no results for query: %s", query)
-                continue
-
-            for song in items:
-                song_id = song.get("id")
-
-                if not song_id:
-                    continue
-
-                lyrics_list = song.get("lyrics", [])
-
-                if not lyrics_list:
-                    logger.debug(
-                        "VocaDB song found but API returned no lyrics list: %s; trying page scrape",
-                        song_id
-                    )
-
-                    lyrics = self.fetch_from_vocadb_by_song_id(song_id)
-
-                    if lyrics:
-                        return lyrics.strip()
-
-                    continue
-
-                for lyric_entry in lyrics_list:
-                    lyric_id = lyric_entry.get("id")
-
-                    if not lyric_id:
-                        continue
-
-                    lyrics = self.fetch_vocadb_lyrics(lyric_id)
-
-                    if lyrics:
-                        logger.debug("Fallback success: VocaDB")
-                        return lyrics.strip()
-
-        logger.debug("Fallback failed: VocaDB no usable lyrics")
-        return None
-
-    def fetch_from_vocadb_by_song_id(self, song_id):
-        logger.debug("Trying VocaDB song ID page scrape: %s", song_id)
-
-        lyric_id = self.fetch_vocadb_lyrics_id_from_page(song_id)
-
-        if lyric_id:
-            return self.fetch_vocadb_lyrics(lyric_id)
-
-        return None
-
-    def fetch_vocadb_lyrics(self, lyric_id):
-        logger.debug("Trying VocaDB lyric ID: %s", lyric_id)
-
-        url = f"https://vocadb.net/api/songs/lyrics/{lyric_id}"
-        data = self._get_json(url)
-
-        if not isinstance(data, dict):
-            return None
-
-        lyrics = data.get("value")
-
-        if isinstance(lyrics, str) and lyrics.strip():
-            logger.debug("Fallback success: VocaDB lyric value")
-            return lyrics.strip()
-
-        logger.debug("VocaDB lyric failed. Data: %r", data)
-        return None
-
-class ThemeThing(QObject):
-    def __init__(self, player):
-        super().__init__()
-        self.player = player
-        self.current_theme = DEFAULT_THEME.copy()
-
-    def refresh_current_theme(self):
-        if not hasattr(self.player, "current_theme") or self.player.current_theme is None:
-            self.player.current_theme = DEFAULT_THEME.copy()
-
-        self.current_theme = self.player.current_theme
-        return self.current_theme
-
-    def change_bg_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "bg", color.name())
-
-    def change_text_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "text", color.name())
-
-    def change_muted_text_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "muted_text", color.name())
-
-    def change_panel_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "panel", color.name())
-
-    def change_panel_active_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "panel_active", color.name())
-
-    def change_border_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border", color.name())
-
-    def change_border_hover_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border_hover", color.name())
-
-    def change_border_selected_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border_selected", color.name())
-
-    def change_border_disabled_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "border_disabled", color.name())
-
-    def change_button_hover_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "button_hover", color.name())
-
-    def change_button_pressed_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "button_pressed", color.name())
-
-    def change_accent_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "accent", color.name())
-
-    def change_accent_hover_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "accent_hover", color.name())
-
-    def change_selection_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "selection", color.name())
-
-    def change_slider_bg_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "slider_bg", color.name())
-
-    def change_disabled_text_color(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            set_theme_value(self, "disabled_text", color.name())
-
-class SongRowWidget(QWidget):
-    def __init__(self, title_text: str, artist_text: str, pixmap: QPixmap | None = None, show_handle=False, row_height=60):
-        super().__init__()
-        self.setFixedHeight(row_height)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
-        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        cover = QLabel()
-        cover.setFixedSize(52, 52)
-        cover.setScaledContents(False)
-        cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cover.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-        if pixmap and not pixmap.isNull():
-            cover.setPixmap(pixmap)
-
-        layout.addWidget(cover, 1, Qt.AlignmentFlag.AlignVCenter)
-
-        self.setObjectName("SongRowWidget")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        self.setStyleSheet("""
-        QWidget#SongRowWidget {
-            background: transparent;
-        }
-        QWidget#SongRowWidget QWidget {
-            background: transparent;
-        }
-        QWidget#SongRowWidget QLabel {
-            background: transparent;
-        }
-        """)
-
-        text_box = QWidget()
-        text_layout = QVBoxLayout(text_box)
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(1)
-
-        title = QLabel(title_text)
-        title.setObjectName("QueueRowTitle")
-        title.setStyleSheet("background: transparent;")
-        title.setFont(self.parent().font() if self.parent() else QFont())
-        title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-
-        artist = QLabel(artist_text)
-        artist.setObjectName("MutedLabel")
-        artist.setStyleSheet("""
-            background: transparent;
-            color: #9ca3af;
-        """)
-        artist.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(0)
-        text_layout.addStretch(1)
-        text_layout.addWidget(title)
-        text_layout.addWidget(artist)
-        text_layout.addStretch(1)
-
-        layout.addWidget(text_box, 1, Qt.AlignmentFlag.AlignVCenter)
-
-        if show_handle:
-            handle = QLabel("☰")
-            handle.setFixedSize(28, 52)
-            handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            handle.setStyleSheet("""
-                background: transparent;
-                font-size: 18px;
-                padding: 0px;
-                margin: 0px;
-            """)
-            layout.addWidget(handle, 0, Qt.AlignmentFlag.AlignVCenter)
-
-class QueueListWidget(QListWidget):
-    deletePressed = Signal()
-    selectAllPressed = Signal()
-
-    HANDLE_WIDTH = 40
-
-    def __init__(self, player):
-        super().__init__()
-        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.player = player
-        self._drag_allowed = False
-
-        self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-        self.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.setDragEnabled(True)
-        self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
-
-    def wheelEvent(self, event):
-        smooth_wheel_scroll(self, event)
-
-    def mousePressEvent(self, event):
-        self._drag_allowed = (
-            event.position().x() >= self.viewport().width() - self.HANDLE_WIDTH
-        )
-
-        super().mousePressEvent(event)
-
-    def startDrag(self, supportedActions):
-        if not self._drag_allowed:
-            return
-
-        super().startDrag(supportedActions)
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Delete:
-            self.deletePressed.emit()
-            return
-
-        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
-            self.selectAll()
-            self.selectAllPressed.emit()
-            return
-
-        super().keyPressEvent(event)
-
-    def dropEvent(self, event):
-        super().dropEvent(event)
-        self.save_queue_order()
-
-    def save_queue_order(self):
-        new_queue = []
-
-        for i in range(self.count()):
-            item = self.item(i)
-            song_index = item.data(Qt.UserRole)
-
-            if song_index is not None:
-                new_queue.append(int(song_index))
-
-        self.player.engine.queue = new_queue
-        self.player.engine.preset.queue = list(new_queue)
-        self.player._autosave_current_preset()
-
-class QueueItemDelegate(QStyledItemDelegate):
-    def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-
-        painter.save()
-
-        rect = option.rect
-
-        painter.setPen(option.palette.text().color())
-
-        font = painter.font()
-        font.setPointSize(14)
-        painter.setFont(font)
-
-        handle_rect = QRect(
-            rect.right() - 34,
-            rect.top(),
-            28,
-            rect.height()
-        )
-
-        painter.drawText(
-            handle_rect,
-            Qt.AlignmentFlag.AlignCenter,
-            "☰"
-        )
-
-        painter.restore()
-
-LF_FACESIZE = 32
-STD_OUTPUT_HANDLE = -11
-
-class COORD(ctypes.Structure):
-    _fields_ = [
-        ("X", ctypes.c_short),
-        ("Y", ctypes.c_short),
-    ]
-
-class CONSOLE_FONT_INFOEX(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", ctypes.c_ulong),
-        ("nFont", ctypes.c_ulong),
-        ("dwFontSize", COORD),
-        ("FontFamily", ctypes.c_uint),
-        ("FontWeight", ctypes.c_uint),
-        ("FaceName", wintypes.WCHAR * LF_FACESIZE),
-    ]
-
-@dataclass
-class Preset:
-    show_console: bool = False
-    logging_level: int = 0
-    main_window_geometry: dict | None = None
-    lyrics_window_geometry: dict | None = None
-    floating_window_geometry: dict | None = None
-    muted: bool = False
-    shuffle: bool = True
-    repeat: bool = False
-    current_song: int = 0
-    volume: float = 100
-    lyrics_window: bool = False
-    lyrics_window_on_top: bool = False
-    floating_lyrics: bool = False
-    floating_lyrics_on_top: bool = False
-    romaji: bool = False
-    translated: bool = False
-    library_sort_mode: int = 2
-    library_show_images: bool = True
-    normalize_audio: bool = True
-    online_lyrics: bool = True
-    download_lyrics: bool = True
-    MUSIXMATCH_USER_TOKEN: str = ''
-    queue: list[int] | None = None
-    tab_order: list[str] | None = None
-
-
-
+#region Widgets
 class LyricsPopupWindow(QWidget):
     geometryChanged = Signal()
     closedByUser = Signal()
@@ -1435,8 +669,24 @@ class LyricStuff(QObject):
         self.window = None
         self.floating_window = None
         self.translation_cache = {}
-        self.KAKASI_IMPORT = KAKASI_IMPORTED
+        self._status_callback = None
         self.LyricsFetcher = LyricsFetcher(self)
+
+    def set_status_callback(self, callback):
+        self._status_callback = callback
+
+    def clear_status_callback(self, callback=None):
+        if callback is None or self._status_callback == callback:
+            self._status_callback = None
+
+    def emit_status(self, message: str):
+        callback = getattr(self, "_status_callback", None)
+        if callback is None:
+            return
+        try:
+            callback(str(message))
+        except RuntimeError:
+            self._status_callback = None
 
     def show_window(self):
         if self.window is None:
@@ -1574,7 +824,7 @@ class LyricStuff(QObject):
         return "\n".join(output)
 
     def translate_lrc_lines(self, text: str, target: str = "en") -> str:
-        self.engine.player.lyrics_status.setText("Translating...")
+        self.emit_status("Translating...")
         cache_key = (target, text)
 
         cached = self.translation_cache.get(cache_key)
@@ -1907,6 +1157,848 @@ class LyricStuff(QObject):
         preset.floating_window_geometry = self._geometry_to_dict(self.floating_window)
 
         self.engine.player._autosave_current_preset()
+
+class LibraryListWidget(QListWidget):
+    deletePressed = Signal()
+    selectAllPressed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+
+    def wheelEvent(self, event):
+        smooth_wheel_scroll(self, event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self.deletePressed.emit()
+            return
+
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            self.selectAll()
+            self.selectAllPressed.emit()
+            return
+
+        super().keyPressEvent(event)
+
+class JumpSlider(QSlider):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(),
+                self.maximum(),
+                int(event.position().x()),
+                self.width()
+            )
+
+            self.setValue(value)
+            self.sliderPressed.emit()
+            self.sliderMoved.emit(value)
+
+        super().mousePressEvent(event)
+
+class SongRowWidget(QWidget):
+    def __init__(self, title_text: str, artist_text: str, pixmap: QPixmap | None = None, show_handle=False, row_height=60):
+        super().__init__()
+        self.setFixedHeight(row_height)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        cover = QLabel()
+        cover.setFixedSize(52, 52)
+        cover.setScaledContents(False)
+        cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        if pixmap and not pixmap.isNull():
+            cover.setPixmap(pixmap)
+
+        layout.addWidget(cover)
+
+        self.setObjectName("SongRowWidget")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        self.setStyleSheet("""
+        QWidget#SongRowWidget {
+            background: transparent;
+        }
+        QWidget#SongRowWidget QWidget {
+            background: transparent;
+        }
+        QWidget#SongRowWidget QLabel {
+            background: transparent;
+        }
+        """)
+
+        text_box = QWidget()
+        text_layout = QVBoxLayout(text_box)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(1)
+
+        title = QLabel(title_text)
+        title.setObjectName("QueueRowTitle")
+        title.setStyleSheet("background: transparent;")
+        title.setFont(self.parent().font() if self.parent() else QFont())
+        title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+        artist = QLabel(artist_text)
+        artist.setObjectName("MutedLabel")
+        artist.setStyleSheet("""
+            background: transparent;
+            color: #9ca3af;
+        """)
+        artist.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(0)
+        text_layout.addStretch(1)
+        text_layout.addWidget(title)
+        text_layout.addWidget(artist)
+        text_layout.addStretch(1)
+
+        layout.addWidget(text_box, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        if show_handle:
+            handle = QLabel("☰")
+            handle.setFixedSize(28, 52)
+            handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            handle.setStyleSheet("""
+                background: transparent;
+                font-size: 18px;
+                padding: 0px;
+                margin: 0px;
+            """)
+            layout.addWidget(handle, 0, Qt.AlignmentFlag.AlignVCenter)
+
+class QueueListWidget(QListWidget):
+    deletePressed = Signal()
+    selectAllPressed = Signal()
+
+    HANDLE_WIDTH = 40
+
+    def __init__(self, player):
+        super().__init__()
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.player = player
+        self._drag_allowed = False
+
+        self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+
+    def wheelEvent(self, event):
+        smooth_wheel_scroll(self, event)
+
+    def mousePressEvent(self, event):
+        self._drag_allowed = (
+            event.position().x() >= self.viewport().width() - self.HANDLE_WIDTH
+        )
+
+        super().mousePressEvent(event)
+
+    def startDrag(self, supportedActions):
+        if not self._drag_allowed:
+            return
+
+        super().startDrag(supportedActions)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self.deletePressed.emit()
+            return
+
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ControlModifier:
+            self.selectAll()
+            self.selectAllPressed.emit()
+            return
+
+        super().keyPressEvent(event)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        self.save_queue_order()
+
+    def save_queue_order(self):
+        new_queue = []
+
+        for i in range(self.count()):
+            item = self.item(i)
+            song_index = item.data(Qt.UserRole)
+
+            if song_index is not None:
+                new_queue.append(int(song_index))
+
+        self.player.engine.queue = new_queue
+        self.player.engine.preset.queue = list(new_queue)
+        self.player._autosave_current_preset()
+
+class QueueItemDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+
+        painter.save()
+
+        rect = option.rect
+
+        painter.setPen(option.palette.text().color())
+
+        font = painter.font()
+        font.setPointSize(14)
+        painter.setFont(font)
+
+        handle_rect = QRect(
+            rect.right() - 34,
+            rect.top(),
+            28,
+            rect.height()
+        )
+
+        painter.drawText(
+            handle_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "☰"
+        )
+
+        painter.restore()
+#endregion
+
+#region Workers
+class LoudnessWorker(QObject):
+    finished = Signal(str, float)
+    failed = Signal(str, str)
+
+    def __init__(self, path: str, target_lufs: float):
+        super().__init__()
+        self.path = path
+        self.target_lufs = target_lufs
+
+    def run(self):
+        try:
+            from librosa import load as lload
+            import pyloudnorm as pyln
+
+            data, rate = lload(self.path, sr=None, mono=True)
+
+            meter = pyln.Meter(rate)
+            loudness = meter.integrated_loudness(data)
+
+            gain_db = self.target_lufs - loudness
+            self.finished.emit(self.path, gain_db)
+
+        except Exception as e:
+            self.failed.emit(self.path, str(e))
+
+class LyricsWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+    status = Signal(str)
+
+    def __init__(self, lyric_stuff):
+        super().__init__()
+        self.lyric_stuff = lyric_stuff
+        self._running = False
+
+    def _emit_status(self, message: str):
+        if not self._running:
+            return
+        try:
+            self.status.emit(str(message))
+        except RuntimeError:
+            self._running = False
+
+    def run(self):
+        self._running = True
+        self.lyric_stuff.set_status_callback(self._emit_status)
+        try:
+            data = self.lyric_stuff.convert_lyrics()
+            self.finished.emit(data)
+        except Exception as e:
+            self.failed.emit(str(e))
+        finally:
+            self._running = False
+            self.lyric_stuff.clear_status_callback(self._emit_status)
+
+class LyricsResultBridge(QObject):
+    loaded = Signal(object, int, str)
+    failed = Signal(str, int, str)
+    status = Signal(str, int, str)
+#endregion
+
+
+#region Extra
+class LyricsFetcher(QObject):
+    def __init__(self, LyricStuff):
+        super().__init__()
+        self.lyric_stuff = LyricStuff
+        self.SEARCH_HEADERS = {
+            "user-agent": "Mozilla/5.0",
+            "accept": "application/json",
+            "origin": "https://www.musixmatch.com",
+            "referer": "https://www.musixmatch.com/",
+        }
+
+        self.LYRICS_HEADERS = {
+            "user-agent": "Mozilla/5.0",
+        }
+
+    def _get_json(self, url, params=None, headers=None, timeout=10):
+        if params:
+            query = urlencode(params, quote_via=quote)
+            url = f"{url}?{query}"
+
+        req = Request(url, headers=headers or {}, method="GET")
+
+        try:
+            with urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+                logger.debug("Lyrics Response: %s", raw[:300])
+                return json.loads(raw)
+
+        except HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            logger.debug(f"HTTP error: {e.code} {e.reason}")
+            logger.debug("DEBUG BODY: %s", body[:300])
+
+        except URLError as e:
+            logger.debug(f"URL error: {e.reason}")
+
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON error: {e}")
+
+        return {}
+
+    def fetch(self, artist, title):
+        logger.debug("Started Lyrics Fetch (%s - %s)", artist, title)
+        song_looking_for = self.lyric_stuff.engine.get_current_song()
+        self.MUSIXMATCH_USER_TOKEN = self.lyric_stuff.engine.preset.MUSIXMATCH_USER_TOKEN
+
+        tracks = self.search_track(artist, title)
+        self.lyric_stuff.emit_status("Trying Musixmatch...")
+        if tracks:
+            new_song = self.lyric_stuff.engine.get_current_song()
+            if new_song != song_looking_for:
+                logger.debug("Fetch failed: song changed")
+                return None
+            for item in tracks:
+                track = item.get("track", {})
+                track_id = track.get("track_id")
+
+                has_lyrics = track.get("has_lyrics")
+                has_subtitles = track.get("has_subtitles")
+
+                if not has_lyrics and not has_subtitles:
+                    logger.debug(
+                        "Skipping no-lyrics result: %s - %s",
+                        track.get("artist_name"),
+                        track.get("track_name"),
+                    )
+                    continue
+
+                if not track_id:
+                    continue
+
+                logger.debug("Trying: %s - %s", track.get("artist_name"), track.get("track_name"))
+
+                lyrics = self.get_lyrics(track_id)
+
+                if lyrics:
+                    logger.debug("🟣 Lyrics found")
+                    return lyrics
+        else:
+            logger.debug("No Musixmatch results found.")
+
+        logger.debug("Trying fallback providers...")
+        self.lyric_stuff.emit_status("Trying fallback...")
+
+        for fallback in (
+            self.fetch_from_lrclib,
+            self.fetch_from_lyrics_ovh,
+            self.fetch_from_vocadb,
+            self.fetch_from_vocaloid_wiki,
+        ):
+            try:
+                new_song = self.lyric_stuff.engine.get_current_song()
+                if new_song != song_looking_for:
+                    logger.debug("Fetch failed: song changed")
+                    return None
+                lyrics = fallback(artist, title)
+
+                if lyrics:
+                    logger.debug("🟣 Lyrics found from fallback: %s", fallback.__name__)
+                    return lyrics
+
+            except Exception as e:
+                logger.warning("🟡 Fallback failed (%s): %s", fallback.__name__, e)
+
+        logger.debug("No lyrics found.")
+        return None
+
+    def search_track(self, artist, title):
+        url = "https://apic-desktop.musixmatch.com/ws/1.1/track.search"
+
+        params = {
+            "q_artist": artist,
+            "q_track": title,
+            "page_size": 5,
+            "s_track_rating": "desc",
+            "app_id": "web-desktop-app-v1.0",
+            "usertoken": self.MUSIXMATCH_USER_TOKEN,
+        }
+
+        data = self._get_json(url, params=params, headers=self.SEARCH_HEADERS)
+
+        if not isinstance(data, dict):
+            return []
+
+        message = data.get("message")
+        if not isinstance(message, dict):
+            return []
+
+        body = message.get("body")
+        if not isinstance(body, dict):
+            return []
+
+        track_list = body.get("track_list")
+        if isinstance(track_list, list):
+            return track_list
+
+        return []
+
+    def get_lyrics(self, track_id):
+        endpoints = [
+            ("track.subtitle.get", "subtitle", "subtitle_body", {"subtitle_format": "lrc"}),
+            ("track.lyrics.get", "lyrics", "lyrics_body", {}),
+        ]
+
+        for endpoint_name, body_key, text_key, extra_params in endpoints:
+            url = f"https://apic-desktop.musixmatch.com/ws/1.1/{endpoint_name}"
+
+            params = {
+                "track_id": track_id,
+                "app_id": "web-desktop-app-v1.0",
+                "usertoken": self.MUSIXMATCH_USER_TOKEN,
+                **extra_params,
+            }
+
+            data = self._get_json(url, params=params, headers=self.LYRICS_HEADERS)
+
+            if not isinstance(data, dict):
+                continue
+
+            message = data.get("message")
+            if not isinstance(message, dict):
+                continue
+
+            header = message.get("header")
+            if not isinstance(header, dict):
+                header = {}
+
+            status_code = header.get("status_code")
+            if status_code != 200:
+                logger.debug("%s failed. Status: %s", endpoint_name, status_code)
+                continue
+
+            body = message.get("body")
+            if not isinstance(body, dict):
+                logger.debug("%s returned non-dict body: %r", endpoint_name, body)
+                continue
+
+            lyrics_obj = body.get(body_key)
+            if not isinstance(lyrics_obj, dict):
+                logger.debug("%s returned non-dict %s: %r", endpoint_name, body_key, lyrics_obj)
+                continue
+
+            lyrics = lyrics_obj.get(text_key)
+            if isinstance(lyrics, str) and lyrics.strip():
+                return lyrics.split("*******")[0].strip()
+
+        return None
+
+    def clean_wiki_text(self, text: str):
+        text = re.sub(r"\{\{[^{}]*\}\}", "", text)
+        text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)
+        text = re.sub(r"==+.*?==+", "", text)
+        return text.strip()
+
+    def fetch_from_lrclib(self, artist, title):
+        logger.debug("Trying LRCLIB...")
+        self.lyric_stuff.emit_status("Trying LRCLIB...")
+        url = "https://lrclib.net/api/search"
+
+        params = {
+            "artist_name": artist,
+            "track_name": title,
+        }
+
+        data = self._get_json(url, params=params)
+
+        if not isinstance(data, list) or not data:
+            return None
+
+        best = data[0]
+
+        synced = best.get("syncedLyrics")
+        plain = best.get("plainLyrics")
+
+        if isinstance(synced, str) and synced.strip():
+            logger.debug("Fallback success: LRCLIB synced")
+            return synced.strip()
+
+        if isinstance(plain, str) and plain.strip():
+            logger.debug("Fallback success: LRCLIB plain")
+            return plain.strip()
+
+        logger.debug("Fallback failed: LRCLIB")
+        return None
+
+    def fetch_from_lyrics_ovh(self, artist, title):
+        logger.debug("Trying lyrics.ovh...")
+        self.lyric_stuff.emit_status("Trying lyrics.ovh...")
+        url = f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}"
+
+        data = self._get_json(url)
+
+        if not isinstance(data, dict):
+            return None
+
+        lyrics = data.get("lyrics")
+
+        if isinstance(lyrics, str) and lyrics.strip():
+            logger.debug("Fallback success: lyrics.ovh")
+            return lyrics.strip()
+
+        logger.debug("Fallback failed: lyrics.ovh")
+        return None
+
+    def fetch_from_vocaloid_wiki(self, artist, title):
+        logger.debug("Trying Vocaloid Wiki...")
+        self.lyric_stuff.emit_status("Trying Vocaloid Wiki...")
+        url = "https://vocaloidlyrics.miraheze.org/w/api.php"
+
+        params = {
+            "action": "query",
+            "prop": "revisions",
+            "rvprop": "content",
+            "rvslots": "main",
+            "titles": title,
+            "format": "json",
+            "formatversion": 2,
+        }
+
+        data = self._get_json(url, params=params)
+
+        if not isinstance(data, dict):
+            return None
+
+        pages = data.get("query", {}).get("pages", [])
+
+        if not pages:
+            return None
+
+        page = pages[0]
+
+        if page.get("missing"):
+            return None
+
+        revisions = page.get("revisions")
+
+        if not revisions:
+            return None
+
+        text = revisions[0]["slots"]["main"]["content"]
+        text = self.clean_wiki_text(text)
+
+        if len(text) > 50:
+            logger.debug("Fallback success: Vocaloid Wiki")
+            return text.strip()
+
+        logger.debug("Fallback failed: Vocaloid Wiki")
+        return None
+
+    def _get_text(self, url, headers=None, timeout=10):
+        req = Request(url, headers=headers or {"user-agent": "Mozilla/5.0"}, method="GET")
+
+        try:
+            with urlopen(req, timeout=timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.debug("Text fetch failed: %s", e)
+            return ""
+
+    def fetch_vocadb_lyrics_id_from_page(self, song_id):
+        text = self._get_text(f"https://vocadb.net/api/songs/{song_id}")
+        try:
+            song = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+        ids_to_try = [song_id]
+        original_id = song.get("originalVersionId")
+        if original_id:
+            ids_to_try.append(original_id)
+
+        for sid in ids_to_try:
+            text = self._get_text(
+                f"https://vocadb.net/api/songs?query=id:{sid}&fields=lyrics&maxResults=1"
+            )
+
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+
+            items = data.get("items") or []
+            if not items:
+                continue
+
+            lyrics = items[0].get("lyrics") or []
+            if lyrics:
+                lyrics_id = int(lyrics[0]["id"])
+                logger.debug("Found VocaDB lyricsId from API: %s", lyrics_id)
+                return lyrics_id
+        html = self._get_text(f"https://vocadb.net/S/{song_id}/lyrics?lyricsId=")
+
+        match = re.search(r'lyricsId=(\d+)', html)
+        if match:
+            return int(match.group(1))
+
+        logger.debug("Could not find VocaDB lyricsId for song %s", song_id)
+        return None
+
+    def fetch_from_vocadb(self, artist, title):
+        logger.debug("Trying VocaDB...")
+        self.lyric_stuff.emit_status("Trying VocaDB...")
+
+        search_queries = [
+            f"{artist} {title}",
+            title,
+            re.sub(r"\s*-\s*", " ", title),
+            re.sub(r"\s*\(.*?\)\s*", " ", title).strip(),
+        ]
+
+        seen = set()
+
+        for query in search_queries:
+            query = " ".join(query.split())
+
+            if not query or query in seen:
+                continue
+
+            seen.add(query)
+
+            url = "https://vocadb.net/api/songs"
+
+            params = {
+                "query": query,
+                "maxResults": 10,
+                "fields": "Lyrics",
+                "nameMatchMode": "Auto",
+            }
+
+            data = self._get_json(url, params=params)
+
+            if not isinstance(data, dict):
+                continue
+
+            items = data.get("items")
+
+            if not isinstance(items, list) or not items:
+                logger.debug("VocaDB no results for query: %s", query)
+                continue
+
+            for song in items:
+                song_id = song.get("id")
+
+                if not song_id:
+                    continue
+
+                lyrics_list = song.get("lyrics", [])
+
+                if not lyrics_list:
+                    logger.debug(
+                        "VocaDB song found but API returned no lyrics list: %s; trying page scrape",
+                        song_id
+                    )
+
+                    lyrics = self.fetch_from_vocadb_by_song_id(song_id)
+
+                    if lyrics:
+                        return lyrics.strip()
+
+                    continue
+
+                for lyric_entry in lyrics_list:
+                    lyric_id = lyric_entry.get("id")
+
+                    if not lyric_id:
+                        continue
+
+                    lyrics = self.fetch_vocadb_lyrics(lyric_id)
+
+                    if lyrics:
+                        logger.debug("Fallback success: VocaDB")
+                        return lyrics.strip()
+
+        logger.debug("Fallback failed: VocaDB no usable lyrics")
+        return None
+
+    def fetch_from_vocadb_by_song_id(self, song_id):
+        logger.debug("Trying VocaDB song ID page scrape: %s", song_id)
+
+        lyric_id = self.fetch_vocadb_lyrics_id_from_page(song_id)
+
+        if lyric_id:
+            return self.fetch_vocadb_lyrics(lyric_id)
+
+        return None
+
+    def fetch_vocadb_lyrics(self, lyric_id):
+        logger.debug("Trying VocaDB lyric ID: %s", lyric_id)
+
+        url = f"https://vocadb.net/api/songs/lyrics/{lyric_id}"
+        data = self._get_json(url)
+
+        if not isinstance(data, dict):
+            return None
+
+        lyrics = data.get("value")
+
+        if isinstance(lyrics, str) and lyrics.strip():
+            logger.debug("Fallback success: VocaDB lyric value")
+            return lyrics.strip()
+
+        logger.debug("VocaDB lyric failed. Data: %r", data)
+        return None
+
+class ThemeThing(QObject):
+    def __init__(self, player):
+        super().__init__()
+        self.player = player
+        self.current_theme = DEFAULT_THEME.copy()
+
+    def refresh_current_theme(self):
+        if not hasattr(self.player, "current_theme") or self.player.current_theme is None:
+            self.player.current_theme = DEFAULT_THEME.copy()
+
+        self.current_theme = self.player.current_theme
+        return self.current_theme
+
+    def change_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "bg", color.name())
+
+    def change_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "text", color.name())
+
+    def change_muted_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "muted_text", color.name())
+
+    def change_panel_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "panel", color.name())
+
+    def change_panel_active_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "panel_active", color.name())
+
+    def change_border_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border", color.name())
+
+    def change_border_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_hover", color.name())
+
+    def change_border_selected_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_selected", color.name())
+
+    def change_border_disabled_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "border_disabled", color.name())
+
+    def change_button_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "button_hover", color.name())
+
+    def change_button_pressed_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "button_pressed", color.name())
+
+    def change_accent_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "accent", color.name())
+
+    def change_accent_hover_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "accent_hover", color.name())
+
+    def change_selection_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "selection", color.name())
+
+    def change_slider_bg_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "slider_bg", color.name())
+
+    def change_disabled_text_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            set_theme_value(self, "disabled_text", color.name())
+#endregion
+
+
+#region Main Things
+@dataclass
+class Preset:
+    show_console: bool = False
+    logging_level: int = 0
+    main_window_geometry: dict | None = None
+    lyrics_window_geometry: dict | None = None
+    floating_window_geometry: dict | None = None
+    muted: bool = False
+    shuffle: bool = True
+    repeat: bool = False
+    current_song: int = 0
+    volume: float = 100
+    lyrics_window: bool = False
+    lyrics_window_on_top: bool = False
+    floating_lyrics: bool = False
+    floating_lyrics_on_top: bool = False
+    romaji: bool = False
+    translated: bool = False
+    library_sort_mode: int = 2
+    library_show_images: bool = True
+    normalize_audio: bool = True
+    online_lyrics: bool = True
+    download_lyrics: bool = True
+    MUSIXMATCH_USER_TOKEN: str = ''
+    queue: list[int] | None = None
+    tab_order: list[str] | None = None
+
 
 
 class Audio(QObject):
@@ -2751,6 +2843,7 @@ class Player(QWidget):
         self._lyrics_bridge = LyricsResultBridge()
         self._lyrics_bridge.loaded.connect(self._lyrics_loaded)
         self._lyrics_bridge.failed.connect(self._lyrics_failed)
+        self._lyrics_bridge.status.connect(self._lyrics_status_changed)
         self._lyrics_load_timer = QTimer(self)
         self._lyrics_load_timer.setSingleShot(True)
         self._lyrics_load_timer.timeout.connect(self._load_lyrics_for_current_song_now)
@@ -4373,6 +4466,11 @@ class Player(QWidget):
                 self._lyrics_bridge.failed.emit(error, rid, path)
         )
 
+        worker.status.connect(
+            lambda message, rid=request_id, path=safe_song_path:
+                self._lyrics_bridge.status.emit(message, rid, path)
+        )
+
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
 
@@ -4390,6 +4488,14 @@ class Player(QWidget):
 
         if hasattr(self, "_lyrics_threads"):
             self._lyrics_threads.pop(request_id, None)
+
+    def _lyrics_status_changed(self, message: str, request_id=None, song_path=None):
+        if song_path != self.engine.get_current_song():
+            return
+        if request_id is not None and request_id != getattr(self, "_lyrics_request_id", None):
+            return
+
+        self.lyrics_status.setText(message)
 
     def _lyrics_failed(self, error: str, request_id=None, song_path=None):
         if song_path != self.engine.get_current_song():
@@ -5221,9 +5327,10 @@ class Player(QWidget):
             logger.warning("🟡 Failed during exit cleanup: %s", e)
 
         super().closeEvent(event)
+#endregion
 
 
-
+#region Theme
 QSS_TEMPLATE = """
 QWidget {{
     background-color: {bg};
@@ -5528,6 +5635,7 @@ DEFAULT_THEME = {
     "floating_lyrics_text": "#e6e9ef"
 }
 
+
 def apply_theme(app: QApplication, settings: dict):
     app.setStyle("Fusion")
     app.setFont(QFont("Inter", 10))
@@ -5556,6 +5664,7 @@ def set_theme_value(self, key: str, value: str):
 
     if hasattr(self, "player") and hasattr(self.player, "_apply_title_font_to_song_text_widgets"):
         self.player._apply_title_font_to_song_text_widgets()
+#endregion
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
