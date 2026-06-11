@@ -31,7 +31,9 @@ README file is currently updated per version
 <details>
 <summary>Known Issues:</summary>
 
-  * Translation Not Working
+  * Images for Queue/Library are shifted down
+
+  * Show Images Button Does Nothing
 
 
 </details>
