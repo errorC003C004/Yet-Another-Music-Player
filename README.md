@@ -10,7 +10,7 @@ README file is currently updated per version
 
 * Free
 
-* Read only .ogg, .opus, .oga, .flac files
+* Read only .ogg, .opus, .oga, .flac, .mp3, .flac, .ogg, .oga, .opus, .wav, .m4a, .mp4, .aac, .wma, .aiff, .aif, .m3u, .m3u8 files
 
 * Show embedded images/authors/titles
 
