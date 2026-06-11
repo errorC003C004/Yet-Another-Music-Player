@@ -41,10 +41,12 @@ Every time I worked on it
     6-05-26 11:06 PM === Made Queue/Libary Show Artist Under The Title
                         + Optimized Slots
     6-08-26 10:17 PM === Organized Code, Made Online Lyrics in Thread, auto font download
+    6-11-26 12:12 AM === Some Fixes with Slots, Added .mp3, .flac, .ogg, .oga, .opus, .wav, .m4a, .mp4, .aac, .wma, .aiff, .aif, .m3u, .m3u8
 
 Known Issues:
     * Translation Not Working on EXE
     * Images for Queue/Library are shifted down
+    * Show Images Button Does Nothing
 
 Fixed Issues:
     * 
@@ -101,6 +103,91 @@ LIB_AND_PYLN_IMPORTED = False
 
 player_ver = "1.2"
 
+#region Audio Stuff
+audio_ext = {
+    ".mp3",
+    ".flac",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".wav",
+    ".m4a",
+    ".mp4",
+    ".aac",
+    ".wma",
+    ".aiff",
+    ".aif",
+}
+
+playlist_ext = {
+    ".m3u",
+    ".m3u8",
+}
+
+lib_ext = audio_ext | playlist_ext
+
+
+def is_supported_audio_file(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in audio_ext
+def is_supported_playlist_file(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in playlist_ext
+def is_supported_library_file(path: str) -> bool:
+    ext = os.path.splitext(path)[1].lower()
+    return ext in lib_ext
+def read_m3u_playlist(path: str) -> list[str]:
+    songs = []
+
+    try:
+        base_dir = os.path.dirname(path)
+
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+
+                if not line or line.startswith("#"):
+                    continue
+
+                if line.lower().startswith(("http://", "https://")):
+                    continue
+
+                if not os.path.isabs(line):
+                    line = os.path.abspath(os.path.join(base_dir, line))
+
+                if os.path.isfile(line) and is_supported_audio_file(line):
+                    songs.append(line)
+
+    except Exception as e:
+        logger.warning("🟡 Failed to read playlist %s: %s", path, e)
+
+    return songs
+def collect_supported_audio_paths(path: str) -> list[str]:
+    found = []
+
+    if not path:
+        return found
+
+    if os.path.isdir(path):
+        for root, dirs, files in os.walk(path):
+            for name in files:
+                child = os.path.join(root, name)
+
+                if is_supported_audio_file(child):
+                    found.append(child)
+                elif is_supported_playlist_file(child):
+                    found.extend(read_m3u_playlist(child))
+
+        return found
+
+    if not os.path.isfile(path):
+        return found
+
+    if is_supported_audio_file(path):
+        found.append(path)
+    elif is_supported_playlist_file(path):
+        found.extend(read_m3u_playlist(path))
+
+    return found
+#endregion
 
 if getattr(sys, 'frozen', False):
     runningpy = False
@@ -1216,7 +1303,7 @@ class SongRowWidget(QWidget):
         if pixmap and not pixmap.isNull():
             cover.setPixmap(pixmap)
 
-        layout.addWidget(cover)
+        layout.addWidget(cover, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.setObjectName("SongRowWidget")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1242,6 +1329,7 @@ class SongRowWidget(QWidget):
         title.setObjectName("QueueRowTitle")
         title.setStyleSheet("background: transparent;")
         title.setFont(self.parent().font() if self.parent() else QFont())
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
         artist = QLabel(artist_text)
@@ -1250,14 +1338,14 @@ class SongRowWidget(QWidget):
             background: transparent;
             color: #9ca3af;
         """)
+        artist.setAlignment(Qt.AlignmentFlag.AlignLeft)
         artist.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(0)
-        text_layout.addStretch(1)
-        text_layout.addWidget(title)
-        text_layout.addWidget(artist)
-        text_layout.addStretch(1)
+        text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        text_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
+        text_layout.addWidget(artist, 0, Qt.AlignmentFlag.AlignLeft)
 
         layout.addWidget(text_box, 1, Qt.AlignmentFlag.AlignVCenter)
 
@@ -1995,7 +2083,7 @@ class Preset:
     normalize_audio: bool = True
     online_lyrics: bool = True
     download_lyrics: bool = True
-    MUSIXMATCH_USER_TOKEN: str = ''
+    MUSIXMATCH_USER_TOKEN: str = 'Enter Musixmatch user token here'
     queue: list[int] | None = None
     tab_order: list[str] | None = None
 
@@ -2068,6 +2156,77 @@ class Audio(QObject):
     def _unlock_nav(self):
         self._nav_locked = False
 
+    def _first_text(self, value, fallback: str) -> str:
+        try:
+            if value is None:
+                return fallback
+
+            if isinstance(value, (list, tuple)):
+                if not value:
+                    return fallback
+                value = value[0]
+
+            value = str(value).strip()
+            return value if value else fallback
+
+        except Exception:
+            return fallback
+
+    def _extract_cover_from_mutagen(self, path: str, mf) -> str:
+        try:
+            cover_data = None
+            mime = "image/jpeg"
+
+            if mf is None:
+                return BLANK_PATH
+
+            if hasattr(mf, "pictures") and mf.pictures:
+                pic = mf.pictures[0]
+                cover_data = pic.data
+                mime = getattr(pic, "mime", "image/jpeg") or "image/jpeg"
+
+            if cover_data is None and hasattr(mf, "get"):
+                pics = mf.get("metadata_block_picture")
+
+                if pics:
+                    pic = Picture(base64.b64decode(pics[0]))
+                    cover_data = pic.data
+                    mime = pic.mime or "image/jpeg"
+
+            if cover_data is None and hasattr(mf, "tags") and mf.tags:
+                for key in mf.tags.keys():
+                    if str(key).startswith("APIC"):
+                        apic = mf.tags[key]
+                        cover_data = apic.data
+                        mime = getattr(apic, "mime", "image/jpeg") or "image/jpeg"
+                        break
+
+            if cover_data is None and hasattr(mf, "tags") and mf.tags:
+                covr = mf.tags.get("covr")
+
+                if covr:
+                    cover_data = bytes(covr[0])
+                    mime = "image/jpeg"
+
+            if not cover_data:
+                return BLANK_PATH
+
+            os.makedirs(TEMP_DIR, exist_ok=True)
+
+            ext = "jpg" if mime in ("image/jpeg", "image/jpg") else "png"
+            h = hashlib.sha256(path.encode("utf-8", errors="ignore")).hexdigest()
+            cover_path = os.path.join(TEMP_DIR, f"cover_{h}.{ext}")
+
+            if not os.path.exists(cover_path):
+                with open(cover_path, "wb") as f:
+                    f.write(cover_data)
+
+            return cover_path
+
+        except Exception as e:
+            logger.warning("🟡 Cover extraction failed for %s: %s", os.path.basename(path), e)
+            return BLANK_PATH
+
     def get_data_for_path(self, path: str):
         if not path or not os.path.isfile(path):
             return "Unknown Artist", os.path.basename(path or ""), BLANK_PATH
@@ -2076,48 +2235,33 @@ class Audio(QObject):
         if cached:
             return cached
 
+        fallback_title = os.path.splitext(os.path.basename(path))[0]
+
         try:
-            mf = MutagenFile(path)
-            if mf is None:
-                result = ("Unknown Artist", os.path.splitext(os.path.basename(path))[0], BLANK_PATH)
-                self._metadata_cache[path] = result
-                return result
-
             artist = "Unknown Artist"
-            title = os.path.splitext(os.path.basename(path))[0]
+            title = fallback_title
 
-            if hasattr(mf, "get"):
-                artist_value = mf.get("artist", ["Unknown Artist"])
-                title_value = mf.get("title", [title])
-                artist = artist_value[0] if isinstance(artist_value, list) else str(artist_value)
-                title = title_value[0] if isinstance(title_value, list) else str(title_value)
+            easy = MutagenFile(path, easy=True)
 
-            cover_path = BLANK_PATH
-            pics = mf.get("metadata_block_picture") if hasattr(mf, "get") else None
+            if easy is not None and hasattr(easy, "get"):
+                artist = self._first_text(easy.get("artist"), artist)
+                title = self._first_text(easy.get("title"), title)
 
-            pic = None
-            if pics:
-                pic = Picture(base64.b64decode(pics[0]))
-            elif hasattr(mf, "pictures") and mf.pictures:
-                pic = mf.pictures[0]
+                if artist == "Unknown Artist":
+                    artist = self._first_text(easy.get("albumartist"), artist)
 
-            if pic:
-                os.makedirs(TEMP_DIR, exist_ok=True)
-                ext = "jpg" if pic.mime in ("image/jpeg", "image/jpg") else "png"
-                h = hashlib.sha256(path.encode()).hexdigest()
-                cover_path = os.path.join(TEMP_DIR, f"cover_{h}.{ext}")
-
-                if not os.path.exists(cover_path):
-                    with open(cover_path, "wb") as f:
-                        f.write(pic.data)
+            raw = MutagenFile(path)
+            cover_path = self._extract_cover_from_mutagen(path, raw)
 
             result = (artist, title, cover_path)
             self._metadata_cache[path] = result
             return result
 
         except Exception as e:
-            logger.warning("Failed to read metadata for path: %s", e)
-            return "Unknown Artist", os.path.splitext(os.path.basename(path))[0], BLANK_PATH
+            logger.warning("🟡 Failed to read metadata for %s: %s", os.path.basename(path), e)
+            result = ("Unknown Artist", fallback_title, BLANK_PATH)
+            self._metadata_cache[path] = result
+            return result
 
     def _apply_playback_state_on_qt_thread(self, state_value: int):
         try:
@@ -2212,52 +2356,7 @@ class Audio(QObject):
         if not current_song:
             return "Unknown Artist", "Unknown Title", BLANK_PATH
 
-        cached = self._metadata_cache.get(current_song)
-        if cached:
-            return cached
-
-        try:
-            mf = MutagenFile(current_song)
-            if mf is None:
-                result = ("Unknown Artist", os.path.basename(current_song), BLANK_PATH)
-                self._metadata_cache[current_song] = result
-                return result
-
-            artist = "Unknown Artist"
-            title = os.path.splitext(os.path.basename(current_song))[0]
-
-            if hasattr(mf, "get"):
-                artist_value = mf.get("artist", ["Unknown Artist"])
-                title_value = mf.get("title", [title])
-                artist = artist_value[0] if isinstance(artist_value, list) else str(artist_value)
-                title = title_value[0] if isinstance(title_value, list) else str(title_value)
-
-            cover_path = BLANK_PATH
-            pics = mf.get("metadata_block_picture") if hasattr(mf, "get") else None
-
-            pic = None
-            if pics:
-                pic = Picture(base64.b64decode(pics[0]))
-            elif hasattr(mf, "pictures") and mf.pictures:
-                pic = mf.pictures[0]
-
-            if pic:
-                os.makedirs(TEMP_DIR, exist_ok=True)
-                ext = "jpg" if pic.mime in ("image/jpeg", "image/jpg") else "png"
-                h = hashlib.sha256(current_song.encode()).hexdigest()
-                cover_path = os.path.join(TEMP_DIR, f"cover_{h}.{ext}")
-
-                if not os.path.exists(cover_path):
-                    with open(cover_path, "wb") as f:
-                        f.write(pic.data)
-
-            result = (artist, title, cover_path)
-            self._metadata_cache[current_song] = result
-            return result
-
-        except Exception as e:
-            logger.warning("Failed to read metadata: %s", e)
-            return "Unknown Artist", os.path.basename(current_song), BLANK_PATH
+        return self.get_data_for_path(current_song)
 
     def db_to_linear(self, db):
         return 10 ** (db / 20)
@@ -3784,7 +3883,7 @@ class Player(QWidget):
                 path = data.get("path") if data else None
 
                 item = QListWidgetItem()
-                item.setData(Qt.UserRole, index)
+                item.setData(Qt.ItemDataRole.UserRole, index)
                 item.setSizeHint(QSize(260, 68))
 
                 artist = "Unknown Artist"
@@ -3945,7 +4044,7 @@ class Player(QWidget):
 
             for index in self.engine.queue:
                 item = QListWidgetItem()
-                item.setData(Qt.UserRole, index)
+                item.setData(Qt.ItemDataRole.UserRole, index)
                 item.setSizeHint(QSize(260, 68))
 
                 artist, title, cover_path = self._get_row_data_cached(index)
@@ -4653,12 +4752,13 @@ class Player(QWidget):
         )
 
     def dragEnterEvent(self, event):
-        allowed_exts = (".ogg", ".opus", ".oga", ".flac")
-
         if event.mimeData().hasUrls():
-            if any(url.toLocalFile().lower().endswith(allowed_exts) for url in event.mimeData().urls()):
-                event.acceptProposedAction()
-                return
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+
+                if os.path.isdir(path) or is_supported_library_file(path):
+                    event.acceptProposedAction()
+                    return
 
         event.ignore()
 
@@ -4666,51 +4766,48 @@ class Player(QWidget):
         if not isValid(self.song_list):
             logger.warning("🟡 song_list was deleted, skipping dropEvent")
             return
-        allowed_exts = (".ogg", ".opus", ".oga", ".flac")
 
         added = False
         last_index = None
+        existing_paths = {d.get("path") for d in self.songs.values()}
 
         for url in event.mimeData().urls():
-            path = url.toLocalFile()
+            dropped_path = url.toLocalFile()
 
-            if not path.lower().endswith(allowed_exts):
-                continue
+            for path in collect_supported_audio_paths(dropped_path):
+                if path in existing_paths:
+                    continue
 
-            if not os.path.isfile(path):
-                continue
+                index = str(len(self.songs))
+                self.songs[index] = {"path": path}
+                existing_paths.add(path)
+                last_index = int(index)
+                added = True
 
-            if any(d.get("path") == path for d in self.songs.values()):
-                continue
-
-            index = str(len(self.songs))
-            self.songs[index] = {"path": path}
-            if added:
-                self._refresh_library_list()
-                self.engine._update_history_limit()
-                self._autosave_current_preset()
-
-            last_index = int(index)
-            added = True
-            logger.debug(f"🟣 Added: {path}")
+                logger.debug("🟣 Added: %s", path)
 
         if last_index is not None:
             self.current_song = last_index
             self.engine.preset.current_song = last_index
 
-            song_name = self._get_current_song_name()
+            artist, title, cover_path = self.engine.get_data_for_path(
+                self.songs[str(last_index)]["path"]
+            )
 
-            if os.path.exists(self.cover_path):
-                pixmap = QPixmap(self.cover_path)
-                self.label.setPixmap(pixmap)
+            if os.path.exists(cover_path):
+                pixmap = QPixmap(cover_path)
+                if not pixmap.isNull():
+                    self.label.setPixmap(pixmap)
+                    self.cover_path = cover_path
 
-            self.setWindowTitle(f"Yet Another Music Player - {self._get_current_preset_name()} - {song_name}")
+            self.setWindowTitle(
+                f"Yet Another Music Player - {self._get_current_preset_name()} - {artist} - {title}"
+            )
 
         if added:
+            self._refresh_library_list()
             self.engine._update_history_limit()
             self._autosave_current_preset()
-    
-        if added:
             event.acceptProposedAction()
         else:
             event.ignore()
