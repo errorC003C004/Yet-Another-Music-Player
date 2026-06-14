@@ -43,6 +43,7 @@
     6-11-26 12:12 AM === Some Fixes with Slots, Added .mp3, .flac, .ogg, .oga, .opus, .wav, .m4a, .mp4, .aac, .wma, .aiff, .aif, .m3u, .m3u8
                         + Made everything in try except, Made Em dashes (—) in the title bar
     6-12-26 10:55 PM === Changed Logging (allows print()), organized a bit more
+    6-13-26 08:42 PM === Made logging into a folder, auto scroll turns off on scroll (2.5 secs until on), Comment Cleanup
 '''
  
 ''' Known Issues:
@@ -62,7 +63,6 @@
 ''' Future Features:
     * If lyrics window is draggable, user can scroll with scroll wheel to skip lines or scroll down (only scroll if plain, if timed, skip to next line)
     * Option to also save song current position/time
-    * Auto Scroll for Plain, goes at a certain speed, if the scroll is moved (lyrics tab), it continues from there, not the old spot
     * Youtube Imbedded Support
     * Search Bar in Library
 '''
@@ -85,7 +85,7 @@ from winrt.windows.storage.streams import RandomAccessStreamReference
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QStyle, QColorDialog, QFrame, QSizePolicy, QInputDialog, QStyledItemDelegate, QTabWidget, QWidget, QPushButton, QScrollArea, QLabel, QListWidget, QListWidgetItem, QCheckBox, QSlider, QComboBox, QGroupBox, QMenu, QAbstractItemView, QApplication, QLineEdit, QMessageBox
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint, QRect, QThread, QSize, QPropertyAnimation, QEasingCurve, QEvent
 from PySide6.QtGui import QPixmap, QFont, QCloseEvent, QIcon, QFontDatabase
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -98,7 +98,7 @@ from urllib.parse import urlencode, quote
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
 import random
-from datetime import timedelta
+from datetime import datetime, timedelta
 import re
 import hashlib
 import logging
@@ -221,7 +221,10 @@ logger.handlers.clear()
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 APPDATA_ROOT = os.getenv("APPDATA") or str(Path.home())
 APPDATA_DIR = os.path.join(APPDATA_ROOT, "errorC003C004", "Music Player")
-LOG_PATH = os.path.join(APPDATA_DIR, "player.log")
+current_date = datetime.now().strftime("%Y-%m-%d")
+LOG_DIR = os.path.join(APPDATA_DIR, "Logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_PATH = os.path.join(LOG_DIR, f"YAMPv{player_ver}-{current_date}.log")
 file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
@@ -236,12 +239,10 @@ class StreamToLogger:
         if not text:
             return
 
-        # still show in console
         if self.original_stream:
             self.original_stream.write(text)
             self.original_stream.flush()
 
-        # collect until newline so logs are not broken up
         self._buffer += text
 
         while "\n" in self._buffer:
@@ -1804,7 +1805,7 @@ class LyricsResultBridge(QObject):
 #endregion
 
 
-#region Extra
+#region Random
 class LyricsFetcher(QObject):
     def __init__(self, LyricStuff):
         try:
@@ -3058,7 +3059,7 @@ class Audio(QObject):
 
                     self.audio_player.play()
                     self.player.pause_btn.setText("Pause")
-                    logger.debug("Resumed")
+                    logger.debug("🟣 Resumed")
 
             except Exception as e:
                 logger.warning("🟡 pause crashed: %s", e)
@@ -3697,14 +3698,30 @@ class Player(QWidget):
             # =====================================================
             #                    LYRICS TAB
             # =====================================================
+
             self.lyrics_list = QListWidget()
             self.lyrics_list.setObjectName("LyricsList")
             self.lyrics_list.setSelectionMode(QAbstractItemView.NoSelection)
             self.lyrics_list.setFocusPolicy(Qt.NoFocus)
             self.lyrics_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
 
+            self.sync_lyrics = True
+            self._lyrics_auto_scrolling = False
+            self._lyrics_user_scrolling = False
+
+            self._lyrics_scroll_resume_timer = QTimer(self)
+            self._lyrics_scroll_resume_timer.setSingleShot(True)
+            self._lyrics_scroll_resume_timer.timeout.connect(self._resume_sync_scroll_after_user_scroll)
+
+            self.lyrics_list.viewport().installEventFilter(self)
+            self.lyrics_list.verticalScrollBar().installEventFilter(self)
+
             self.lyrics_status = QLabel("No lyrics Found")
             self.lyrics_status.setObjectName("MutedLabel")
+
+            lyrics_layout_1 = QVBoxLayout()
+            lyrics_layout_1.addWidget(self.lyrics_status, alignment=Qt.AlignLeft)
+            lyrics_layout_1.addStretch()
 
             self.current_lyrics_data = []
             self.current_lyrics_index = -1
@@ -3712,7 +3729,7 @@ class Player(QWidget):
 
             lyrics_group = QGroupBox("Lyrics")
             lyrics_group_layout = QVBoxLayout(lyrics_group)
-            lyrics_group_layout.addWidget(self.lyrics_status)
+            lyrics_group_layout.addLayout(lyrics_layout_1)
             lyrics_group_layout.addWidget(self.lyrics_list, 1)
 
             lyrics_layout.addWidget(lyrics_group, 1)
@@ -3878,8 +3895,6 @@ class Player(QWidget):
             settings_lyrics_layout.addLayout(settings_lyrics_layout_1)
             settings_lyrics_layout.addLayout(settings_lyrics_layout_2)
 
-            # font, size, color, hold time,
-
             # =========================
             # QUEUE SETTINGS
             # =========================738
@@ -3888,12 +3903,8 @@ class Player(QWidget):
             settings_queue_layout = QVBoxLayout(settings_queue_group)
 
             settings_queue_layout_1 = QHBoxLayout()
-            #settings_queue_layout_1.addWidget(self.)
 
             settings_queue_layout.addLayout(settings_queue_layout_1)
-
-            # shuffle
-            # if on, how many on each, 
 
             # =========================
             # LIBRARY SETTINGS
@@ -4160,6 +4171,7 @@ class Player(QWidget):
             self.reset_selected_theme_font_size_btn.clicked.connect(self._reset_selected_theme_font_size)
 
 
+
             self.engine.songEnded.connect(self._handle_song_end)
             for font_file in FONT_DIR.glob("*.ttf"):
                 logger.debug(f"🟣 Loading: {font_file.name}")
@@ -4172,6 +4184,65 @@ class Player(QWidget):
             apply_theme(QApplication.instance(), {"theme": self.current_theme})
         except Exception as e:
             logger.warning("__init__ caused an unexpected bug: %s", e)
+
+    def _set_sync_scroll(self, value: bool):
+        try:
+            self.sync_lyrics = bool(value)
+            self._lyrics_user_scrolling = False
+            self._lyrics_scroll_resume_timer.stop()
+
+            if self.sync_lyrics and 0 <= self.current_lyrics_index < self.lyrics_list.count():
+                item = self.lyrics_list.item(self.current_lyrics_index)
+                if item is not None:
+                    self.smooth_scroll_to_item(item)
+
+        except Exception as e:
+            logger.warning("_set_sync_scroll caused an unexpected bug: %s", e)
+
+    def _pause_sync_scroll_from_user_scroll(self):
+        try:
+            if self._lyrics_auto_scrolling:
+                return
+
+            self._lyrics_user_scrolling = True
+            self.sync_lyrics = False
+
+            self._lyrics_scroll_resume_timer.start(2500)
+
+        except Exception as e:
+            logger.warning("_pause_sync_scroll_from_user_scroll caused an unexpected bug: %s", e)
+
+    def _resume_sync_scroll_after_user_scroll(self):
+        try:
+            self._lyrics_user_scrolling = False
+            self.sync_lyrics = True
+
+            if 0 <= self.current_lyrics_index < self.lyrics_list.count():
+                item = self.lyrics_list.item(self.current_lyrics_index)
+                if item is not None:
+                    self.smooth_scroll_to_item(item)
+
+        except Exception as e:
+            logger.warning("_resume_sync_scroll_after_user_scroll caused an unexpected bug: %s", e)
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj in (self.lyrics_list.viewport(), self.lyrics_list.verticalScrollBar()):
+                event_type = event.type()
+
+                if event_type in (
+                    QEvent.Type.Wheel,
+                    QEvent.Type.MouseButtonPress,
+                    QEvent.Type.MouseMove,
+                    QEvent.Type.KeyPress,
+                ):
+                    self._pause_sync_scroll_from_user_scroll()
+
+            return super().eventFilter(obj, event)
+
+        except Exception as e:
+            logger.warning("eventFilter caused an unexpected bug: %s", e)
+            return False
 
     def _get_row_data_cached(self, index: int):
         try:
@@ -4307,8 +4378,10 @@ class Player(QWidget):
             if item is None:
                 return
 
-            list_widget = self.lyrics_list
+            if not self.sync_lyrics:
+                return
 
+            list_widget = self.lyrics_list
             sb = list_widget.verticalScrollBar()
             rect = list_widget.visualItemRect(item)
 
@@ -4318,15 +4391,30 @@ class Player(QWidget):
 
             target = max(sb.minimum(), min(sb.maximum(), target))
 
+            if target == sb.value():
+                return
+
+            self._lyrics_auto_scrolling = True
+
             anim = QPropertyAnimation(sb, b"value", list_widget)
             anim.setDuration(duration)
             anim.setStartValue(sb.value())
             anim.setEndValue(target)
             anim.setEasingCurve(QEasingCurve.OutCubic)
 
+            def done():
+                try:
+                    self._lyrics_auto_scrolling = False
+                except Exception as e:
+                    logger.warning("smooth_scroll_to_item done caused an unexpected bug: %s", e)
+
+            anim.finished.connect(done)
+
             list_widget._smooth_scroll_anim = anim
             anim.start()
+
         except Exception as e:
+            self._lyrics_auto_scrolling = False
             logger.warning("smooth_scroll_to_item caused an unexpected bug: %s", e)
 
     def _tabs_moved(self, from_index: int, to_index: int):
