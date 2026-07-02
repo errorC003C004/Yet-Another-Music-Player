@@ -44,6 +44,7 @@
                         + Made everything in try except, Made Em dashes (—) in the title bar
     6-12-26 10:55 PM === Changed Logging (allows print()), organized a bit more
     6-13-26 08:42 PM === Made logging into a folder, auto scroll turns off on scroll (2.5 secs until on), Comment Cleanup
+    7-01-26 10:37 PM === Put setup stuff in try except, Fixed Images for Queue/Library being shifted down
 '''
  
 ''' Known Issues:
@@ -53,7 +54,7 @@
 '''
  
 ''' Fixed Issues:
-    * 
+    * Images for Queue/Library are shifted down
 ''' 
  
 ''' Added Features:
@@ -102,6 +103,7 @@ from datetime import datetime, timedelta
 import re
 import hashlib
 import logging
+import threading
 LIB_AND_PYLN_IMPORTED = False
 #endregion
 
@@ -208,10 +210,7 @@ def collect_supported_audio_paths(path: str) -> list[str]:
         logger.warning("collect_supported_audio_paths caused an unexpected bug: %s", e)
 #endregion
 
-if getattr(sys, 'frozen', False):
-    runningpy = False
-else:
-    runningpy = True 
+runningpy = not getattr(sys, "frozen", False)
 
 #region Logging setup
 logger = logging.getLogger(__name__)
@@ -344,21 +343,6 @@ os.makedirs(PROFILE_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(APPDATA_DIR, exist_ok=True)
 
-
-if not os.path.exists(BLANK_PATH):
-    try: 
-        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/files_to_build/no_image.png?raw=true", timeout=10) as r:
-            with open(BLANK_PATH, "wb") as f:
-                f.write(r.read())
-    except Exception as e:
-        logger.warning("🟡 Cant Download Blank Image: %s", e)
-if not os.path.exists(ICON_PATH):
-    try:
-        with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/files_to_build/icon.png?raw=true", timeout=10) as r:
-            with open(ICON_PATH, "wb") as f:
-                f.write(r.read())
-    except Exception as e:
-        logger.warning("🟡 Cant Download Icon Image: %s", e)
 #fonts
 try:
     FONT_NAMES = [
@@ -369,39 +353,78 @@ try:
         "SpotifyMixUITitleVariable.ttf",
     ]
 
-    os.makedirs(FONT_DIR, exist_ok=True)
-    missing_fonts = [
-        name for name in FONT_NAMES
-        if not os.path.exists(os.path.join(FONT_DIR, name))
-    ]
-
-    if missing_fonts:
-        logger.warning("🟡 Missing fonts: %s", missing_fonts)
-        for name in os.listdir(FONT_DIR):
-            path = os.path.join(FONT_DIR, name)
-
+    def _download_missing_assets() -> None:
+        ''' Downloads the blank/icon images and fonts if they're missing.
+            This does blocking network calls (up to several seconds each), so it must
+            NEVER be run at import time or on the UI thread — it's kicked off on a
+            background thread after the window is already shown (see __main__). '''
+        try:
+            if not os.path.exists(BLANK_PATH):
+                try:
+                    with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/files_to_build/no_image.png?raw=true", timeout=10) as r:
+                        with open(BLANK_PATH, "wb") as f:
+                            f.write(r.read())
+                except Exception as e:
+                    logger.warning("🟡 Cant Download Blank Image: %s", e)
+            if not os.path.exists(ICON_PATH):
+                try:
+                    with urlopen("https://github.com/errorC003C004/Yet-Another-Music-Player/blob/main/files_to_build/icon.png?raw=true", timeout=10) as r:
+                        with open(ICON_PATH, "wb") as f:
+                            f.write(r.read())
+                except Exception as e:
+                    logger.warning("🟡 Cant Download Icon Image: %s", e)
+            #fonts
             try:
-                if os.path.isfile(path):
-                    os.remove(path)
+                os.makedirs(FONT_DIR, exist_ok=True)
+                missing_fonts = [
+                    name for name in FONT_NAMES
+                    if not os.path.exists(os.path.join(FONT_DIR, name))
+                ]
+
+                if missing_fonts:
+                    logger.warning("🟡 Missing fonts: %s", missing_fonts)
+                    for name in os.listdir(FONT_DIR):
+                        path = os.path.join(FONT_DIR, name)
+
+                        try:
+                            if os.path.isfile(path):
+                                os.remove(path)
+                        except Exception as e:
+                            logger.warning("🟡 Cant Remove Font File: %s", e)
+                    for name in FONT_NAMES:
+                        url = (
+                            "https://github.com/errorC003C004/Yet-Another-Music-Player"
+                            f"/blob/main/files_to_build/fonts/{quote(name)}?raw=true"
+                        )
+
+                        path = os.path.join(FONT_DIR, name)
+
+                        try:
+                            logger.debug("Downloading font: %s", name)
+
+                            with urlopen(url, timeout=10) as r:
+                                with open(path, "wb") as out:
+                                    out.write(r.read())
+
+                        except Exception as e:
+                            logger.warning("🟡 Cant Download Font %s: %s", name, e)
             except Exception as e:
-                logger.warning("🟡 Cant Remove Font File: %s", e)
-        for name in FONT_NAMES:
-            url = (
-                "https://github.com/errorC003C004/Yet-Another-Music-Player"
-                f"/blob/main/files_to_build/fonts/{quote(name)}?raw=true"
-            )
+                logger.warning("🟡 Cant Download Fonts: %s", e)
+        except Exception as e:
+            logger.warning("_download_missing_assets caused an unexpected bug: %s", e)
 
-            path = os.path.join(FONT_DIR, name)
+    class _AssetsReadyBridge(QObject):
+        ''' Lets the background asset-download thread notify the UI thread when it's
+            done, so Qt signal/slot handles the cross-thread marshaling safely. '''
+        ready = Signal()
 
-            try:
-                logger.debug("Downloading font: %s", name)
+    assets_ready_bridge = _AssetsReadyBridge()
 
-                with urlopen(url, timeout=10) as r:
-                    with open(path, "wb") as out:
-                        out.write(r.read())
-
-            except Exception as e:
-                logger.warning("🟡 Cant Download Font %s: %s", name, e)
+    def _download_missing_assets_then_notify() -> None:
+        try:
+            _download_missing_assets()
+        finally:
+            assets_ready_bridge.ready.emit()
 except Exception as e:
     logger.warning("🟡 Cant Download Fonts: %s", e)
 #endregion
@@ -1530,83 +1553,89 @@ class JumpSlider(QSlider):
 
 class SongRowWidget(QWidget):
     def __init__(self, title_text: str, artist_text: str, pixmap: QPixmap | None = None, show_handle=False, row_height=60):
-        try:
-            super().__init__()
-            self.setFixedHeight(row_height)
+            try:
+                super().__init__()
+                self.setFixedHeight(row_height)
 
-            layout = QHBoxLayout(self)
-            layout.setContentsMargins(8, 4, 8, 4)
-            layout.setSpacing(8)
-            layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                layout = QHBoxLayout(self)
+                layout.setContentsMargins(8, 4, 8, 4)
+                layout.setSpacing(8)
+                layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-            cover = QLabel()
-            cover.setFixedSize(52, 52)
-            cover.setScaledContents(False)
-            cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cover.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                cover = QLabel()
+                cover.setFixedSize(52, 52)
+                cover.setScaledContents(False)
+                cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                cover.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-            if pixmap and not pixmap.isNull():
-                cover.setPixmap(pixmap)
+                if pixmap and not pixmap.isNull():
+                    cover.setPixmap(pixmap)
 
-            layout.addWidget(cover, 0, Qt.AlignmentFlag.AlignVCenter)
+                cover_wrap = QVBoxLayout()
+                cover_wrap.setContentsMargins(0, 0, 0, 0)
+                cover_wrap.setSpacing(0)
+                cover_wrap.addStretch(1)
+                cover_wrap.addWidget(cover)
+                cover_wrap.addStretch(1)
+                layout.addLayout(cover_wrap)
 
-            self.setObjectName("SongRowWidget")
-            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                self.setObjectName("SongRowWidget")
+                self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-            self.setStyleSheet("""
-            QWidget#SongRowWidget {
-                background: transparent;
-            }
-            QWidget#SongRowWidget QWidget {
-                background: transparent;
-            }
-            QWidget#SongRowWidget QLabel {
-                background: transparent;
-            }
-            """)
-
-            text_box = QWidget()
-            text_layout = QVBoxLayout(text_box)
-            text_layout.setContentsMargins(0, 0, 0, 0)
-            text_layout.setSpacing(1)
-
-            title = QLabel(title_text)
-            title.setObjectName("QueueRowTitle")
-            title.setStyleSheet("background: transparent;")
-            title.setFont(self.parent().font() if self.parent() else QFont())
-            title.setAlignment(Qt.AlignmentFlag.AlignLeft)
-            title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-
-            artist = QLabel(artist_text)
-            artist.setObjectName("MutedLabel")
-            artist.setStyleSheet("""
-                background: transparent;
-                color: #9ca3af;
-            """)
-            artist.setAlignment(Qt.AlignmentFlag.AlignLeft)
-            artist.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-
-            text_layout.setContentsMargins(0, 0, 0, 0)
-            text_layout.setSpacing(0)
-            text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-            text_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
-            text_layout.addWidget(artist, 0, Qt.AlignmentFlag.AlignLeft)
-
-            layout.addWidget(text_box, 1, Qt.AlignmentFlag.AlignVCenter)
-
-            if show_handle:
-                handle = QLabel("☰")
-                handle.setFixedSize(28, 52)
-                handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                handle.setStyleSheet("""
+                self.setStyleSheet("""
+                QWidget#SongRowWidget {
                     background: transparent;
-                    font-size: 18px;
-                    padding: 0px;
-                    margin: 0px;
+                }
+                QWidget#SongRowWidget QWidget {
+                    background: transparent;
+                }
+                QWidget#SongRowWidget QLabel {
+                    background: transparent;
+                }
                 """)
-                layout.addWidget(handle, 0, Qt.AlignmentFlag.AlignVCenter)
-        except Exception as e:
-            logger.warning("__init__ caused an unexpected bug: %s", e)
+
+                text_box = QWidget()
+                text_layout = QVBoxLayout(text_box)
+                text_layout.setContentsMargins(0, 0, 0, 0)
+                text_layout.setSpacing(1)
+
+                title = QLabel(title_text)
+                title.setObjectName("QueueRowTitle")
+                title.setStyleSheet("background: transparent;")
+                title.setFont(self.parent().font() if self.parent() else QFont())
+                title.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+                artist = QLabel(artist_text)
+                artist.setObjectName("MutedLabel")
+                artist.setStyleSheet("""
+                    background: transparent;
+                    color: #9ca3af;
+                """)
+                artist.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                artist.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+                text_layout.setContentsMargins(0, 0, 0, 0)
+                text_layout.setSpacing(0)
+                text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                text_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
+                text_layout.addWidget(artist, 0, Qt.AlignmentFlag.AlignLeft)
+
+                layout.addWidget(text_box, 1, Qt.AlignmentFlag.AlignVCenter)
+
+                if show_handle:
+                    handle = QLabel("☰")
+                    handle.setFixedSize(28, 52)
+                    handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    handle.setStyleSheet("""
+                        background: transparent;
+                        font-size: 18px;
+                        padding: 0px;
+                        margin: 0px;
+                    """)
+                    layout.addWidget(handle, 0, Qt.AlignmentFlag.AlignVCenter)
+            except Exception as e:
+                logger.warning("__init__ caused an unexpected bug: %s", e)
 
 class QueueListWidget(QListWidget):
     deletePressed = Signal()
@@ -4170,8 +4199,6 @@ class Player(QWidget):
             self.edit_theme_font_size_btn.clicked.connect(self._edit_selected_theme_font_size)
             self.reset_selected_theme_font_size_btn.clicked.connect(self._reset_selected_theme_font_size)
 
-
-
             self.engine.songEnded.connect(self._handle_song_end)
             for font_file in FONT_DIR.glob("*.ttf"):
                 logger.debug(f"🟣 Loading: {font_file.name}")
@@ -4184,6 +4211,26 @@ class Player(QWidget):
             apply_theme(QApplication.instance(), {"theme": self.current_theme})
         except Exception as e:
             logger.warning("__init__ caused an unexpected bug: %s", e)
+
+    def _on_assets_downloaded(self):
+            try:
+                for font_file in FONT_DIR.glob("*.ttf"):
+                    font_id = QFontDatabase.addApplicationFont(str(font_file))
+                    if font_id == -1:
+                        logger.debug(f"🟣🟡 Failed: {font_file.name}")
+                    else:
+                        logger.debug(f"🟣 Loaded: {font_file.name}")
+
+                if os.path.exists(ICON_PATH):
+                    self.setWindowIcon(QIcon(ICON_PATH))
+
+                if os.path.exists(BLANK_PATH) and self.cover_path == BLANK_PATH:
+                    self.pixmap = QPixmap(self.cover_path)
+                    self.label.setPixmap(self.pixmap)
+
+                apply_theme(QApplication.instance(), {"theme": self.current_theme})
+            except Exception as e:
+                logger.warning("_on_assets_downloaded caused an unexpected bug: %s", e)
 
     def _set_sync_scroll(self, value: bool):
         try:
@@ -4273,29 +4320,33 @@ class Player(QWidget):
             logger.warning("_get_row_data_cached caused an unexpected bug: %s", e)
 
     def _get_row_pixmap_cached(self, cover_path: str):
-        try:
-            cover_path = cover_path if cover_path and os.path.exists(cover_path) else BLANK_PATH
+            try:
+                cover_path = cover_path if cover_path and os.path.exists(cover_path) else BLANK_PATH
 
-            if not hasattr(self, "_row_pixmap_cache"):
-                self._row_pixmap_cache = {}
+                if not hasattr(self, "_row_pixmap_cache"):
+                    self._row_pixmap_cache = {}
 
-            cached = self._row_pixmap_cache.get(cover_path)
-            if cached is not None and not cached.isNull():
-                return cached
+                cached = self._row_pixmap_cache.get(cover_path)
+                if cached is not None and not cached.isNull():
+                    return cached
 
-            pixmap = QPixmap(cover_path)
+                pixmap = QPixmap(cover_path)
 
-            if not pixmap.isNull():
-                pixmap = pixmap.scaled(
-                    52, 52,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation
-                )
+                if not pixmap.isNull():
+                    pixmap = pixmap.scaled(
+                        52, 52,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                    if pixmap.width() != 52 or pixmap.height() != 52:
+                        x = max(0, (pixmap.width() - 52) // 2)
+                        y = max(0, (pixmap.height() - 52) // 2)
+                        pixmap = pixmap.copy(x, y, 52, 52)
 
-            self._row_pixmap_cache[cover_path] = pixmap
-            return pixmap
-        except Exception as e:
-            logger.warning("_get_row_pixmap_cached caused an unexpected bug: %s", e)
+                self._row_pixmap_cache[cover_path] = pixmap
+                return pixmap
+            except Exception as e:
+                logger.warning("_get_row_pixmap_cached caused an unexpected bug: %s", e)
 
     def _set_startup_loading_ui(self):
         try:
@@ -6578,6 +6629,7 @@ QListWidget#SongList::item,
 QListWidget#QueueList::item {{
     font-family: "{title_font}", "{font}", "Spotify Mix UI", "Segoe UI", system-ui;
     font-weight: 600;
+    padding: 0px;
 }}
 
 QLabel#LyricsLabel {{
@@ -6677,8 +6729,14 @@ def set_theme_value(self, key: str, value: str):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = Player()
-    _load_auto_preset(w)
-    if w.song_list.count() > 0:
-        w._set_startup_loading_ui()
     w.show()
+
+    def _load_everything_else():
+        _load_auto_preset(w)
+        if w.song_list.count() > 0:
+            w._set_startup_loading_ui()
+    QTimer.singleShot(0, _load_everything_else)
+    assets_ready_bridge.ready.connect(w._on_assets_downloaded)
+    threading.Thread(target=_download_missing_assets_then_notify, daemon=True).start()
+
     sys.exit(app.exec())
